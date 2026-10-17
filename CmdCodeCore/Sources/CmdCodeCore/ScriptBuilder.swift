@@ -40,12 +40,31 @@ public enum ScriptBuilder {
         return dir
     }
 
+    /// 留在 shell 时最后执行的一行：换成远端用户的登录 shell，继续交互。
+    public static let loginShellLine = #"exec "${SHELL:-bash}" -l"#
+
     /// 内层脚本：有工作目录时第一行是 `cd -- <dir> || exit 1`，之后是原样的命令内容。
     ///
     /// 用单独一行的 `|| exit 1` 而不是 `cd … && 命令`，保证多行命令在 cd 失败时一行都不执行。
-    public static func innerScript(command: String, workingDirectory: String?) -> String {
-        guard let dir = normalizedWorkingDirectory(workingDirectory) else { return command }
-        return "cd -- \(shq(dir)) || exit 1\n" + command
+    ///
+    /// `stayInShell` 为 true 时命令结束后进入登录 shell：命令放在子 bash 里执行，外层忽略 Ctrl-C，
+    /// 这样不管命令正常结束、出错退出还是被 Ctrl-C 中断（比如 `tail -f`），都会留在 shell 里。
+    /// 命令为空时直接进入 shell（登录服务器）。
+    public static func innerScript(command: String, workingDirectory: String?, stayInShell: Bool = false) -> String {
+        var lines: [String] = []
+        if let dir = normalizedWorkingDirectory(workingDirectory) {
+            lines.append("cd -- \(shq(dir)) || exit 1")
+        }
+        if !stayInShell {
+            lines.append(command)
+        } else {
+            if !command.isEmpty {
+                lines.append("trap : INT")
+                lines.append("bash -lc \(shq(command))")
+            }
+            lines.append(loginShellLine)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// UTF-8 编码后的 base64，不换行。
@@ -56,8 +75,8 @@ public enum ScriptBuilder {
     /// 远端命令：`bash -lc "$(printf %s <base64> | base64 -d)"`。
     ///
     /// 只含固定文本和 base64 字符；不占用 stdin，所以 vim、top 等交互程序可用。
-    public static func remoteCommand(command: String, workingDirectory: String?) -> String {
-        let encoded = base64(innerScript(command: command, workingDirectory: workingDirectory))
+    public static func remoteCommand(command: String, workingDirectory: String?, stayInShell: Bool = false) -> String {
+        let encoded = base64(innerScript(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell))
         return "bash -lc \"$(printf %s \(encoded) | base64 -d)\""
     }
 
@@ -75,7 +94,8 @@ public enum ScriptBuilder {
         target: SSHTarget,
         sshpassPath: String,
         command: String,
-        workingDirectory: String?
+        workingDirectory: String?,
+        stayInShell: Bool = false
     ) -> SSHInvocation {
         SSHInvocation(
             executable: sshpassPath,
@@ -89,7 +109,7 @@ public enum ScriptBuilder {
                 "-o", "LogLevel=ERROR",
                 "-l", target.username,
                 "--", target.host,
-                remoteCommand(command: command, workingDirectory: workingDirectory),
+                remoteCommand(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell),
             ],
             environment: ["SSHPASS": target.password])
     }

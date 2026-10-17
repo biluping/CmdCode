@@ -10,12 +10,14 @@ public struct ExecutionPlan: Sendable, Equatable {
     /// 命令名；测试连接时是“测试连接”。
     public var commandName: String
     public var isProduction: Bool
+    /// 命令结束后留在远端的交互 shell 里。登录服务器时命令为空、这里为 true。
+    public var stayInShell: Bool
 
     /// 确认框和终端标签上显示的标题，比如“232 - lims 主服务 / 构建”。
     public var title: String { "\(serverName) / \(commandName)" }
 
     public init(target: SSHTarget, command: String, workingDirectory: String?, requiresConfirmation: Bool,
-                serverName: String, commandName: String, isProduction: Bool = false) {
+                serverName: String, commandName: String, isProduction: Bool = false, stayInShell: Bool = false) {
         self.target = target
         self.command = command
         self.workingDirectory = workingDirectory
@@ -23,6 +25,7 @@ public struct ExecutionPlan: Sendable, Equatable {
         self.serverName = serverName
         self.commandName = commandName
         self.isProduction = isProduction
+        self.stayInShell = stayInShell
     }
 }
 
@@ -41,6 +44,16 @@ extension Server {
             requiresConfirmation: false,
             serverName: name, commandName: "测试连接", isProduction: isProduction)
     }
+
+    /// 登录服务器：有工作目录就先 cd，然后进入交互 shell。不需要确认。
+    public func loginPlan() throws -> ExecutionPlan {
+        ExecutionPlan(
+            target: try sshTarget(),
+            command: "",
+            workingDirectory: ScriptBuilder.normalizedWorkingDirectory(workingDirectory),
+            requiresConfirmation: false,
+            serverName: name, commandName: "登录", isProduction: isProduction, stayInShell: true)
+    }
 }
 
 extension ServerCommand {
@@ -51,6 +64,7 @@ extension ServerCommand {
             command: content,
             workingDirectory: effectiveWorkingDirectory,
             requiresConfirmation: requiresConfirmation,
-            serverName: server.name, commandName: name, isProduction: server.isProduction)
+            serverName: server.name, commandName: name, isProduction: server.isProduction,
+            stayInShell: stayInShell)
     }
 }

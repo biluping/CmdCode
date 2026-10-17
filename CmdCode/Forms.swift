@@ -253,6 +253,9 @@ struct CommandForm: View {
                       detail: isProduction ? "生产环境服务器的命令总是需要确认" : "点击后先弹出确认框再执行",
                       isOn: isProduction ? .constant(true) : $draft.confirmBeforeRun)
                 .disabled(isProduction)
+            ToggleRow(title: "执行完留在 shell",
+                      detail: "命令结束或按 Ctrl-C 后不断开，继续在服务器上输入命令",
+                      isOn: $draft.stayInShell)
         }
     }
 

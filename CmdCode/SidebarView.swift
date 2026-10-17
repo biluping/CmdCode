@@ -490,6 +490,7 @@ private struct ServerRows: View {
     @ViewBuilder
     private var serverMenu: some View {
         Button("新建命令") { model.sheet = .newCommand(server) }
+        Button("登录服务器") { model.login(server) }
         Button("测试连接") { model.testConnection(server) }
         Divider()
         Button("编辑") { model.sheet = .editServer(server) }

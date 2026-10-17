@@ -271,6 +271,7 @@ public struct Library {
         c.content = draft.content
         c.workingDirectory = draft.workingDirectory
         c.confirmBeforeRun = draft.confirmBeforeRun
+        c.stayInShell = draft.stayInShell
         try save()
     }
 
@@ -303,7 +304,7 @@ public struct Library {
 
     private func makeCommand(_ d: CommandDraft) -> ServerCommand {
         let c = ServerCommand(name: d.name, content: d.content, workingDirectory: d.workingDirectory,
-                              confirmBeforeRun: d.confirmBeforeRun)
+                              confirmBeforeRun: d.confirmBeforeRun, stayInShell: d.stayInShell)
         context.insert(c)
         return c
     }

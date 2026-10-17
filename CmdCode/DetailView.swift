@@ -95,6 +95,10 @@ struct ServerDetailView: View {
                 Label("测试连接", systemImage: "bolt")
             }
             .buttonStyle(PillButtonStyle())
+            Button { model.login(server) } label: {
+                Label("登录服务器", systemImage: "terminal")
+            }
+            .buttonStyle(PillButtonStyle())
             Button { model.sheet = .editServer(server) } label: { Image(systemName: "pencil") }
                 .buttonStyle(IconButtonStyle())
                 .help("编辑")
@@ -212,6 +216,9 @@ private struct CommandCardRow: View {
                     Text(command.name).font(Theme.bodyMedium)
                     if command.requiresConfirmation {
                         Chip(text: "执行前确认", tint: .orange)
+                    }
+                    if command.stayInShell {
+                        Chip(text: "留在 shell", systemImage: "terminal")
                     }
                     if let dir = ScriptBuilder.normalizedWorkingDirectory(command.workingDirectory) {
                         Chip(text: dir, systemImage: "folder")

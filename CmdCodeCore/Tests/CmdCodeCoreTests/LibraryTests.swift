@@ -323,6 +323,16 @@ struct LibraryTests {
         #expect(log.confirmBeforeRun == false)
         #expect(try log.executionPlan().requiresConfirmation)
         #expect(try log.executionPlan().workingDirectory == nil)
+
+        d.stayInShell = true
+        try lib.updateCommand(build, with: d)
+        #expect(try build.executionPlan().stayInShell)
+        #expect(try lib.duplicateCommand(build).stayInShell)
+        #expect(try log.executionPlan().stayInShell == false)
+
+        let login = try dev.loginPlan()
+        #expect(login.command == "" && login.stayInShell && !login.requiresConfirmation)
+        #expect(login.workingDirectory == "/usr/local/app/lims")
         #expect(try log.executionPlan().isProduction)
         #expect(try log.executionPlan().title == "135 / 看日志")
 

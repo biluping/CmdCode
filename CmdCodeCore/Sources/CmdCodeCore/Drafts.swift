@@ -74,17 +74,20 @@ public struct CommandDraft: Equatable {
     public var content = ""
     public var workingDirectory = ""
     public var confirmBeforeRun = false
+    public var stayInShell = false
 
-    public init(name: String = "", content: String = "", workingDirectory: String = "", confirmBeforeRun: Bool = false) {
+    public init(name: String = "", content: String = "", workingDirectory: String = "", confirmBeforeRun: Bool = false,
+                stayInShell: Bool = false) {
         self.name = name
         self.content = content
         self.workingDirectory = workingDirectory
         self.confirmBeforeRun = confirmBeforeRun
+        self.stayInShell = stayInShell
     }
 
     public init(_ c: ServerCommand) {
         self.init(name: c.name, content: c.content, workingDirectory: c.workingDirectory,
-                  confirmBeforeRun: c.confirmBeforeRun)
+                  confirmBeforeRun: c.confirmBeforeRun, stayInShell: c.stayInShell)
     }
 
     func validate() throws(LibraryError) {

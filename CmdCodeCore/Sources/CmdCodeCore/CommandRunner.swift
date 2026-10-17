@@ -22,6 +22,7 @@ public struct CommandRunner: Sendable {
         guard let sshpass = locator.locate() else { throw CommandRunnerError.sshpassNotFound }
         return ScriptBuilder.sshInvocation(
             target: plan.target, sshpassPath: sshpass,
-            command: plan.command, workingDirectory: plan.workingDirectory)
+            command: plan.command, workingDirectory: plan.workingDirectory,
+            stayInShell: plan.stayInShell)
     }
 }

@@ -108,6 +108,11 @@ final class AppModel {
         perform { try prepare(server.testConnectionPlan()) }
     }
 
+    /// 登录服务器：在内嵌终端里打开一个交互 shell。
+    func login(_ server: Server) {
+        perform { try prepare(server.loginPlan()) }
+    }
+
     private func prepare(_ plan: ExecutionPlan, replacing: TerminalSession.ID? = nil) {
         if plan.requiresConfirmation {
             pendingReplacement = replacing

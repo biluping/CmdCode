@@ -126,6 +126,43 @@ struct ScriptBuilderTests {
         #expect(!FileManager.default.fileExists(atPath: marker))
     }
 
+    // MARK: 留在 shell / 登录
+
+    /// 用一个假的登录 shell 代替远端用户的 shell，打印它在哪个目录、带了什么参数。
+    private func runStayingInShell(command: String, workingDirectory: String?) throws -> (Shell.Result, String) {
+        let base = try Shell.makeTempDir()
+        let work = base + "/my work"
+        try Shell.mkdir(work)
+        let fakeShell = base + "/fake-shell"
+        try "#!/bin/bash\necho \"SHELL $PWD $*\"\n".write(toFile: fakeShell, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeShell)
+        var env = Shell.cleanEnv(home: base)
+        env["SHELL"] = fakeShell
+        let remote = ScriptBuilder.remoteCommand(command: command, workingDirectory: workingDirectory.map { _ in work },
+                                                 stayInShell: true)
+        return (try Shell.run("/bin/bash", ["-c", remote], cwd: base, env: env), work)
+    }
+
+    @Test("登录：先 cd 到工作目录，再进入登录 shell")
+    func loginEntersShell() throws {
+        let (r, work) = try runStayingInShell(command: "", workingDirectory: "x")
+        #expect(r.stdout == "SHELL \(work) -l\n")
+        #expect(r.status == 0)
+    }
+
+    @Test("留在 shell：命令出错退出后仍进入 shell")
+    func stayInShellAfterFailure() throws {
+        let (r, work) = try runStayingInShell(command: "echo 'it''s'\nexit 3\necho never", workingDirectory: "x")
+        #expect(r.stdout == "its\nSHELL \(work) -l\n")
+    }
+
+    @Test func innerScriptStayingInShell() {
+        #expect(ScriptBuilder.innerScript(command: "a'b", workingDirectory: nil, stayInShell: true)
+                == "trap : INT\nbash -lc 'a'\\''b'\n" + ScriptBuilder.loginShellLine)
+        #expect(ScriptBuilder.innerScript(command: "", workingDirectory: "/d", stayInShell: true)
+                == "cd -- '/d' || exit 1\n" + ScriptBuilder.loginShellLine)
+    }
+
     // MARK: ssh 启动参数端到端
 
     @Test("ssh 参数：密码只走环境变量、命令结果与直接执行一致")

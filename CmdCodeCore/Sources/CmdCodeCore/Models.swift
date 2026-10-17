@@ -98,17 +98,21 @@ public final class ServerCommand {
     /// 空字符串表示沿用服务器的工作目录。
     public var workingDirectory: String
     public var confirmBeforeRun: Bool
+    /// 执行完不断开，留在远端的交互 shell 里。
+    public var stayInShell: Bool = false
     public var createdAt: Date
     /// 在所属服务器内的位置（拖动排序），相同时按创建时间。
     public var sortOrder: Int = 0
 
     public var server: Server?
 
-    public init(name: String, content: String, workingDirectory: String = "", confirmBeforeRun: Bool = false) {
+    public init(name: String, content: String, workingDirectory: String = "", confirmBeforeRun: Bool = false,
+                stayInShell: Bool = false) {
         self.name = name
         self.content = content
         self.workingDirectory = workingDirectory
         self.confirmBeforeRun = confirmBeforeRun
+        self.stayInShell = stayInShell
         self.createdAt = CreationClock.next()
     }
 
