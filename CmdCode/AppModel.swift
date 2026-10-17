@@ -56,6 +56,8 @@ final class AppModel {
 
     var selection: SidebarSelection?
     var sheet: SheetRoute?
+    /// ⌘K 搜索浮层是否显示。
+    var isSearching = false
     var pendingDeletion: PendingDeletion?
     /// 等待确认的执行。
     var pendingExecution: ExecutionPlan?

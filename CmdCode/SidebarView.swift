@@ -22,6 +22,16 @@ struct SidebarView: View {
 
                 Label("密码管理", systemImage: "key")
                     .tag(SidebarSelection.credentials)
+
+                Button { model.isSearching = true } label: {
+                    HStack {
+                        Label("搜索", systemImage: "magnifyingglass")
+                        Spacer()
+                        Text("⌘K").foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
 
             Section {

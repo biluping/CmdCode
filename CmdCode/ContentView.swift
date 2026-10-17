@@ -13,6 +13,18 @@ struct ContentView: View {
         } detail: {
             DetailView()
         }
+        .overlay(alignment: .top) {
+            if model.isSearching {
+                ZStack(alignment: .top) {
+                    // 点击浮层外的区域关闭。
+                    Color.black.opacity(0.15)
+                        .ignoresSafeArea()
+                        .onTapGesture { model.isSearching = false }
+                    SearchPanel()
+                        .padding(.top, 60)
+                }
+            }
+        }
         .sheet(item: $model.sheet) { route in
             SheetContent(route: route)
                 .environment(model)
