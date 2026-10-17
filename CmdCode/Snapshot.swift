@@ -69,6 +69,11 @@ enum Snapshot {
                 model.sheet = .editServer(seed.lims232)
             }),
             ("08-form-command", { model.sheet = .editCommand(seed.build) }),
+            ("11-confirm", { model.pendingExecution = try? seed.build.executionPlan() }),
+            ("12-confirm-production", {
+                model.pendingExecution = nil
+                model.pendingExecution = try? seed.lims135.sortedCommands.first?.executionPlan()
+            }),
             ("09-toast", { model.showToast("已复制密码，60 秒后自动清除") }),
             ("10-terminal", {
                 if model.sessions.isEmpty {
@@ -86,8 +91,9 @@ enum Snapshot {
             NSApp.appearance = NSAppearance(named: appearance)
             let suffix = appearance == .aqua ? "light" : "dark"
             for (name, apply) in scenes {
-                if model.sheet != nil {
+                if model.sheet != nil || (model.pendingExecution != nil && !name.hasPrefix("12")) {
                     model.sheet = nil
+                    model.pendingExecution = nil
                     try? await Task.sleep(for: .milliseconds(500))
                 }
                 apply()

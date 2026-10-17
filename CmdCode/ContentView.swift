@@ -55,23 +55,20 @@ struct ContentView: View {
         .alert(model.alert?.title ?? "", isPresented: isPresent($model.alert), presenting: model.alert) { _ in
             Button("好") {}
         } message: { Text($0.message) }
-        .alert(executionTitle, isPresented: isPresent($model.pendingExecution),
-               presenting: model.pendingExecution) { plan in
-            Button("执行") { model.confirmExecution(plan) }
-            Button("取消", role: .cancel) {}
-        } message: { plan in
-            Text("\(plan.target.username)@\(plan.target.host):\(plan.target.port)\n\n\(preview(plan.command))")
+        .sheet(isPresented: isPresent($model.pendingExecution)) {
+            if let plan = model.pendingExecution {
+                ExecutionConfirmView(plan: plan) {
+                    model.confirmExecution(plan)
+                } onCancel: {
+                    model.pendingExecution = nil
+                }
+            }
         }
         .alert(deletionTitle, isPresented: isPresent($model.pendingDeletion),
                presenting: model.pendingDeletion) { _ in
             Button("删除", role: .destructive) { model.confirmDeletion() }
             Button("取消", role: .cancel) {}
         } message: { Text(deletionMessage($0)) }
-    }
-
-    private var executionTitle: String {
-        guard let plan = model.pendingExecution else { return "" }
-        return "确认执行“\(plan.title)”？"
     }
 
     private var deletionTitle: String {
@@ -93,12 +90,6 @@ struct ContentView: View {
         }
     }
 
-    /// 确认框里只预览命令的前几行。
-    private func preview(_ command: String) -> String {
-        let lines = command.split(separator: "\n", omittingEmptySubsequences: false)
-        let head = lines.prefix(8).joined(separator: "\n")
-        return lines.count > 8 ? head + "\n…" : head
-    }
 }
 
 private struct ToastView: View {
