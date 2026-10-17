@@ -28,14 +28,20 @@ public final class Credential {
 public final class ServerGroup {
     public var name: String
     public var createdAt: Date
+    /// 拖动排序后的位置，小的在前；相同时按创建时间。旧数据迁移后都是 0，即保持创建顺序。
+    public var sortOrder: Int = 0
 
     @Relationship(deleteRule: .nullify, inverse: \Server.group)
     public var servers: [Server] = []
 
-    public init(name: String) {
+    public init(name: String, sortOrder: Int = 0) {
         self.name = name
         self.createdAt = CreationClock.next()
+        self.sortOrder = sortOrder
     }
+
+    /// 侧栏和下拉框里的顺序。
+    public static let displayOrder = [SortDescriptor(\ServerGroup.sortOrder), SortDescriptor(\ServerGroup.createdAt)]
 }
 
 @Model
@@ -48,6 +54,8 @@ public final class Server {
     public var isProduction: Bool
     public var note: String
     public var createdAt: Date
+    /// 在所属分组内的位置（拖动排序），相同时按创建时间。
+    public var sortOrder: Int = 0
 
     public var credential: Credential?
     public var group: ServerGroup?
@@ -72,10 +80,13 @@ public final class Server {
         self.createdAt = CreationClock.next()
     }
 
-    /// 按创建顺序排列的命令。
+    /// 按排序位置排列的命令（拖动排序），相同时按创建顺序。
     public var sortedCommands: [ServerCommand] {
-        commands.sorted { $0.createdAt < $1.createdAt }
+        commands.sorted { ($0.sortOrder, $0.createdAt) < ($1.sortOrder, $1.createdAt) }
     }
+
+    /// 同一分组内服务器的顺序。
+    public static let displayOrder = [SortDescriptor(\Server.sortOrder), SortDescriptor(\Server.createdAt)]
 }
 
 /// 绑定在一台服务器上的固定命令。
@@ -88,6 +99,8 @@ public final class ServerCommand {
     public var workingDirectory: String
     public var confirmBeforeRun: Bool
     public var createdAt: Date
+    /// 在所属服务器内的位置（拖动排序），相同时按创建时间。
+    public var sortOrder: Int = 0
 
     public var server: Server?
 

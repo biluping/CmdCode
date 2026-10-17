@@ -122,7 +122,7 @@ private func message(for error: Error) -> String {
 struct ServerForm: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \ServerGroup.createdAt) private var groups: [ServerGroup]
+    @Query(sort: ServerGroup.displayOrder) private var groups: [ServerGroup]
     @Query(sort: \Credential.createdAt) private var credentials: [Credential]
 
     let server: Server?

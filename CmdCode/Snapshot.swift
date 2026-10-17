@@ -74,8 +74,14 @@ enum Snapshot {
                 model.pendingExecution = nil
                 model.pendingExecution = try? seed.lims135.sortedCommands.first?.executionPlan()
             }),
+            ("13-rename-group", {
+                model.pendingExecution = nil
+                model.selection = nil
+                model.renamingGroup = model.library.groups().first?.persistentModelID
+            }),
             ("09-toast", { model.showToast("已复制密码，60 秒后自动清除") }),
             ("10-terminal", {
+                model.renamingGroup = nil
                 if model.sessions.isEmpty {
                     model.open(demoSession("看日志", server: "135 - lims", production: true,
                                            script: "for i in 1 2 3; do echo \"$(date +%T) INFO  request handled in ${i}2ms\"; done; sleep 600"))

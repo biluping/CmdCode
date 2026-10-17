@@ -5,8 +5,8 @@ import SwiftUI
 /// 左侧栏：顶部操作 + 分组 → 服务器 → 命令 三层树 + 底部状态。
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
-    @Query(sort: \ServerGroup.createdAt) private var groups: [ServerGroup]
-    @Query(sort: \Server.createdAt) private var servers: [Server]
+    @Query(sort: ServerGroup.displayOrder) private var groups: [ServerGroup]
+    @Query(sort: Server.displayOrder) private var servers: [Server]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -179,6 +179,8 @@ private struct TreeRow<Trailing: View>: View {
     let title: String
     var titleTint: Color = .primary
     var selected = false
+    /// 不为 nil 时用它替代标题（原地重命名）。
+    var titleEditor: AnyView? = nil
     @ViewBuilder var trailing: Trailing
     var onToggle: (() -> Void)?
 
@@ -202,11 +204,15 @@ private struct TreeRow<Trailing: View>: View {
                 .font(.system(size: 12))
                 .foregroundStyle(iconTint)
                 .frame(width: 16)
-            Text(title)
-                .font(Theme.body)
-                .foregroundStyle(titleTint)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            if let titleEditor {
+                titleEditor
+            } else {
+                Text(title)
+                    .font(Theme.body)
+                    .foregroundStyle(titleTint)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             Spacer(minLength: 4)
             trailing
         }
@@ -217,25 +223,126 @@ private struct TreeRow<Trailing: View>: View {
     }
 }
 
+// MARK: - 拖动排序
+
+/// 拖到某一行上时的放置位置：上方、下方，或放进去（服务器拖到分组标题上）。
+enum DropSpot {
+    case above, below, into
+}
+
+/// 树的通用放置处理：根据拖动的内容和鼠标在行内的位置决定放在哪，松手时交给 `perform`。
+private struct TreeDropDelegate: DropDelegate {
+    let model: AppModel
+    /// 返回放置位置；nil 表示这一行不接受这次拖动。
+    let spot: (DragItem, _ y: CGFloat) -> DropSpot?
+    @Binding var indicator: DropSpot?
+    let perform: (DragItem, DropSpot) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool { model.dragging != nil }
+
+    func dropEntered(info: DropInfo) { update(info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        update(info)
+        return DropProposal(operation: indicator == nil ? .forbidden : .move)
+    }
+
+    func dropExited(info: DropInfo) { indicator = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer {
+            indicator = nil
+            model.dragging = nil
+        }
+        guard let item = model.dragging, let spot = indicator else { return false }
+        withAnimation(.easeOut(duration: 0.15)) { perform(item, spot) }
+        return true
+    }
+
+    private func update(_ info: DropInfo) {
+        indicator = model.dragging.flatMap { spot($0, info.location.y) }
+    }
+}
+
+private extension View {
+    /// 拖动来源：开始拖动时记下拖的是什么。
+    func treeDraggable(_ model: AppModel, _ item: @escaping () -> DragItem) -> some View {
+        onDrag {
+            model.dragging = item()
+            return NSItemProvider(object: "cmdcode-sidebar" as NSString)
+        }
+    }
+
+    /// 放置位置的提示：上/下方一条强调色细线，放进去时整行描边高亮。
+    func dropIndicator(_ spot: DropSpot?, indent: CGFloat) -> some View {
+        overlay {
+            switch spot {
+            case .above?:
+                VStack { line(indent); Spacer() }
+            case .below?:
+                VStack { Spacer(); line(indent) }
+            case .into?:
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.accentColor.opacity(0.12))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1.5))
+                    .allowsHitTesting(false)
+            case nil:
+                EmptyView()
+            }
+        }
+    }
+
+    private func line(_ indent: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            Circle().strokeBorder(Color.accentColor, lineWidth: 1.5).frame(width: 6, height: 6)
+            Rectangle().fill(Color.accentColor).frame(height: 2)
+        }
+        .padding(.leading, indent)
+        .frame(height: 6)
+        .offset(y: 0)
+        .allowsHitTesting(false)
+    }
+}
+
+/// 鼠标在一行的上半部分还是下半部分。
+private func half(_ y: CGFloat) -> DropSpot { y < 14 ? .above : .below }
+
+// MARK: - 分组
+
 private struct SectionRows: View {
     @Environment(AppModel.self) private var model
     let section: SidebarSection
     let groups: [ServerGroup]
 
+    @State private var dropSpot: DropSpot?
+    @State private var draftName = ""
+    @FocusState private var nameFocused: Bool
+
     private var isExpanded: Bool { model.expandedSections.contains(section.id) }
+    private var isRenaming: Bool {
+        guard let group = section.group else { return false }
+        return model.renamingGroup == group.persistentModelID
+    }
 
     var body: some View {
         TreeRow(depth: 0, isExpanded: isExpanded, icon: section.group == nil ? "tray" : "folder",
-                title: section.title) {
-            if !isExpanded {
+                title: section.title, titleEditor: isRenaming ? AnyView(nameEditor) : nil) {
+            if !isExpanded && !isRenaming {
                 Text("\(section.serverCount)")
                     .font(Theme.small)
                     .foregroundStyle(Theme.faint)
                     .monospacedDigit()
             }
         } onToggle: { toggle() }
-        .onTapGesture { toggle() }
+        .onTapGesture { if !isRenaming { toggle() } }
+        // 双击原地重命名；两次单击会展开又收起，状态不变。
+        .simultaneousGesture(TapGesture(count: 2).onEnded { startRenaming() })
         .contextMenu { groupMenu }
+        .modifier(GroupDragSource(group: section.group))
+        .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
+            model.drop(item, onSection: section.group, spot: spot)
+        })
+        .dropIndicator(dropSpot, indent: 6)
         .animation(.easeOut(duration: 0.12), value: isExpanded)
 
         if isExpanded {
@@ -250,6 +357,47 @@ private struct SectionRows: View {
         }
     }
 
+    /// 分组拖到分组上：插到它前面（拖到“未分组”上即排到最后）。服务器拖到分组上：放进这个分组。
+    private func spot(_ item: DragItem, _ y: CGFloat) -> DropSpot? {
+        switch item {
+        case .group(let g): g === section.group ? nil : .above
+        case .server: .into
+        case .command: nil
+        }
+    }
+
+    private var nameEditor: some View {
+        TextField("分组名称", text: $draftName)
+            .textFieldStyle(.plain)
+            .font(Theme.body)
+            .focused($nameFocused)
+            .padding(.horizontal, 5)
+            .frame(height: 22)
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 1.5))
+            .onSubmit { commitRename() }
+            .onExitCommand { model.renamingGroup = nil }
+            .onChange(of: nameFocused) { if !nameFocused { commitRename() } }
+            .onAppear {
+                draftName = section.group?.name ?? ""
+                DispatchQueue.main.async { nameFocused = true }
+            }
+    }
+
+    private func startRenaming() {
+        guard let group = section.group else { return }
+        model.renamingGroup = group.persistentModelID
+    }
+
+    private func commitRename() {
+        guard isRenaming, let group = section.group else { return }
+        model.renamingGroup = nil
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 名字为空或没变就当作取消
+        guard !name.isEmpty, name != group.name else { return }
+        model.perform { try model.library.renameGroup(group, to: name) }
+    }
+
     private func toggle() {
         if isExpanded { model.expandedSections.remove(section.id) } else { model.expandedSections.insert(section.id) }
     }
@@ -258,18 +406,35 @@ private struct SectionRows: View {
     private var groupMenu: some View {
         Button("新建服务器") { model.sheet = .newServer(group: section.group) }
         // “未分组”不能重命名和删除。
-        if let group = section.group {
-            Button("重命名") { model.sheet = .renameGroup(group) }
+        if section.group != nil {
+            Button("重命名") { startRenaming() }
             Divider()
-            Button("删除", role: .destructive) { model.pendingDeletion = .group(group) }
+            Button("删除", role: .destructive) { model.pendingDeletion = .group(section.group!) }
         }
     }
 }
+
+/// “未分组”不能拖动，其他分组可以。
+private struct GroupDragSource: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let group: ServerGroup?
+
+    func body(content: Content) -> some View {
+        if let group {
+            content.treeDraggable(model) { .group(group) }
+        } else {
+            content
+        }
+    }
+}
+
+// MARK: - 服务器
 
 private struct ServerRows: View {
     @Environment(AppModel.self) private var model
     let server: Server
     let groups: [ServerGroup]
+    @State private var dropSpot: DropSpot?
 
     private var id: PersistentIdentifier { server.persistentModelID }
     private var isExpanded: Bool { model.expandedServers.contains(id) }
@@ -292,6 +457,11 @@ private struct ServerRows: View {
             }
         }
         .contextMenu { serverMenu }
+        .treeDraggable(model) { .server(server) }
+        .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
+            model.drop(item, onServer: server, spot: spot)
+        })
+        .dropIndicator(dropSpot, indent: 22)
 
         if isExpanded {
             ForEach(server.sortedCommands) { CommandRow(command: $0) }
@@ -307,6 +477,12 @@ private struct ServerRows: View {
                 .frame(height: 26)
             }
         }
+    }
+
+    /// 服务器拖到服务器上：插到它前面或后面（展开时只能插到前面，避免插进它的命令中间）。
+    private func spot(_ item: DragItem, _ y: CGFloat) -> DropSpot? {
+        guard case .server(let s) = item, s !== server else { return nil }
+        return isExpanded ? .above : half(y)
     }
 
     private func toggle() {
@@ -334,25 +510,26 @@ private struct ServerRows: View {
     }
 }
 
+// MARK: - 命令
+
 private struct CommandRow: View {
     @Environment(AppModel.self) private var model
     let command: ServerCommand
     @State private var hovering = false
+    @State private var dropSpot: DropSpot?
 
     var body: some View {
-        // 点击即执行；需要确认时 AppModel 会先弹出确认框。
-        Button { model.run(command) } label: {
-            TreeRow(depth: 2, isExpanded: nil, icon: hovering ? "play.fill" : "play",
-                    iconTint: hovering ? .accentColor : Theme.faint, title: command.name) {
-                if command.requiresConfirmation {
-                    Image(systemName: "exclamationmark.shield")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
-                        .help("执行前确认")
-                }
+        TreeRow(depth: 2, isExpanded: nil, icon: hovering ? "play.fill" : "play",
+                iconTint: hovering ? .accentColor : Theme.faint, title: command.name) {
+            if command.requiresConfirmation {
+                Image(systemName: "exclamationmark.shield")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .help("执行前确认")
             }
         }
-        .buttonStyle(.plain)
+        // 点击即执行；需要确认时 AppModel 会先弹出确认框。
+        .onTapGesture { model.run(command) }
         .onHover { hovering = $0 }
         .help(command.content)
         .contextMenu {
@@ -363,5 +540,16 @@ private struct CommandRow: View {
             Divider()
             Button("删除", role: .destructive) { model.pendingDeletion = .command(command) }
         }
+        .treeDraggable(model) { .command(command) }
+        .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
+            model.drop(item, onCommand: command, spot: spot)
+        })
+        .dropIndicator(dropSpot, indent: 38)
+    }
+
+    /// 只能在同一台服务器内调整命令顺序。
+    private func spot(_ item: DragItem, _ y: CGFloat) -> DropSpot? {
+        guard case .command(let c) = item, c !== command, c.server === command.server else { return nil }
+        return half(y)
     }
 }

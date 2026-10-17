@@ -43,6 +43,13 @@ enum PendingDeletion {
     case credential(Credential)
 }
 
+/// 左侧栏里正在拖动的内容。
+enum DragItem {
+    case group(ServerGroup)
+    case server(Server)
+    case command(ServerCommand)
+}
+
 /// 普通提示框。
 struct AppAlert {
     var title: String
@@ -77,6 +84,10 @@ final class AppModel {
     /// 左侧栏的展开状态。不持久化，每次启动全部折叠。
     var expandedSections: Set<SidebarSection.ID> = []
     var expandedServers: Set<PersistentIdentifier> = []
+    /// 正在原地重命名的分组。
+    var renamingGroup: PersistentIdentifier?
+    /// 正在拖动的内容（拖动只在左侧栏内部进行，不需要真正序列化）。
+    @ObservationIgnored var dragging: DragItem?
     var sshpassMissing: Bool
     let clipboard: SecretClipboard
 
@@ -242,6 +253,44 @@ final class AppModel {
 
     func move(_ s: Server, to g: ServerGroup?) {
         perform { try library.moveServer(s, to: g) }
+    }
+
+    // MARK: 拖动排序
+
+    /// 放到分组标题上：分组插到它前面（“未分组”即最后）；服务器放进这个分组的最后。
+    func drop(_ item: DragItem, onSection target: ServerGroup?, spot: DropSpot) {
+        perform {
+            switch item {
+            case .group(let g):
+                let groups = library.groups()
+                let index = target.flatMap { t in groups.firstIndex { $0 === t } } ?? groups.count
+                try library.moveGroup(g, to: index)
+            case .server(let s):
+                try library.moveServer(s, to: target)
+                expandedSections.insert(target.map { .group($0.persistentModelID) } ?? .ungrouped)
+            case .command:
+                break
+            }
+        }
+    }
+
+    /// 服务器放到另一台服务器的上方/下方，可以跨分组。
+    func drop(_ item: DragItem, onServer target: Server, spot: DropSpot) {
+        guard case .server(let s) = item else { return }
+        perform {
+            let siblings = library.servers(in: target.group)
+            guard let index = siblings.firstIndex(where: { $0 === target }) else { return }
+            try library.moveServer(s, to: target.group, at: spot == .below ? index + 1 : index)
+        }
+    }
+
+    /// 命令放到同一台服务器里另一条命令的上方/下方。
+    func drop(_ item: DragItem, onCommand target: ServerCommand, spot: DropSpot) {
+        guard case .command(let c) = item, let server = target.server else { return }
+        perform {
+            guard let index = server.sortedCommands.firstIndex(where: { $0 === target }) else { return }
+            try library.moveCommand(c, to: spot == .below ? index + 1 : index)
+        }
     }
 
     /// 执行一个可能出错的动作，出错时弹出提示。
