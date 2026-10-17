@@ -22,9 +22,9 @@ struct ContentView: View {
         } message: {
             Text(SSHPassLocator.installHint)
         }
-        .alert("出错了", isPresented: isPresent($model.errorMessage), presenting: model.errorMessage) { _ in
+        .alert(model.alert?.title ?? "", isPresented: isPresent($model.alert), presenting: model.alert) { _ in
             Button("好") {}
-        } message: { Text($0) }
+        } message: { Text($0.message) }
         .alert(executionTitle, isPresented: isPresent($model.pendingExecution),
                presenting: model.pendingExecution) { plan in
             Button("执行") { model.execute(plan) }
@@ -49,6 +49,7 @@ struct ContentView: View {
         case .group(let g): "删除分组“\(g.name)”？"
         case .server(let s, _): "删除服务器“\(s.name)”？"
         case .command(let c): "删除命令“\(c.name)”？"
+        case .credential(let c): "删除凭据“\(c.name)”？"
         case nil: ""
         }
     }
@@ -58,7 +59,7 @@ struct ContentView: View {
         case .group: return "组里的服务器会移到“\(Library.ungroupedTitle)”，服务器本身不会删除。"
         case .server(_, let names):
             return names.isEmpty ? "这台服务器没有命令。" : "以下命令会一起删除：\n" + names.joined(separator: "\n")
-        case .command: return "删除后无法恢复。"
+        case .command, .credential: return "删除后无法恢复。"
         }
     }
 
@@ -89,6 +90,8 @@ private struct SheetContent: View {
         case .editCommand(let c): CommandForm(server: c.server, command: c)
         case .newGroup: GroupNameForm(group: nil)
         case .renameGroup(let g): GroupNameForm(group: g)
+        case .newCredential: CredentialForm(credential: nil)
+        case .editCredential(let c): CredentialForm(credential: c)
         }
     }
 }

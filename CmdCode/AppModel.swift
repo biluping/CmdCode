@@ -16,6 +16,8 @@ enum SheetRoute: Identifiable {
     case editCommand(ServerCommand)
     case newGroup
     case renameGroup(ServerGroup)
+    case newCredential
+    case editCredential(Credential)
 
     var id: String {
         switch self {
@@ -25,6 +27,8 @@ enum SheetRoute: Identifiable {
         case .editCommand(let c): "editCommand-\(c.persistentModelID)"
         case .newGroup: "newGroup"
         case .renameGroup(let g): "renameGroup-\(g.persistentModelID)"
+        case .newCredential: "newCredential"
+        case .editCredential(let c): "editCredential-\(c.persistentModelID)"
         }
     }
 }
@@ -34,6 +38,13 @@ enum PendingDeletion {
     case group(ServerGroup)
     case server(Server, commandNames: [String])
     case command(ServerCommand)
+    case credential(Credential)
+}
+
+/// 普通提示框。
+struct AppAlert {
+    var title: String
+    var message: String
 }
 
 /// 界面状态与动作。所有数据修改都走 `Library`，执行走 `CommandRunner`。
@@ -48,12 +59,14 @@ final class AppModel {
     var pendingDeletion: PendingDeletion?
     /// 等待确认的执行。
     var pendingExecution: ExecutionPlan?
-    var errorMessage: String?
+    var alert: AppAlert?
     var sshpassMissing: Bool
+    let clipboard: SecretClipboard
 
-    init(library: Library, runner: CommandRunner = CommandRunner()) {
+    init(library: Library, runner: CommandRunner = CommandRunner(), clipboard: SecretClipboard = SecretClipboard()) {
         self.library = library
         self.runner = runner
+        self.clipboard = clipboard
         // 启动时清理遗留的临时脚本（比如上次终端没能成功打开时），并检测 sshpass。
         runner.store.cleanUpLeftovers()
         sshpassMissing = runner.locator.locate() == nil
@@ -102,6 +115,8 @@ final class AppModel {
                 try library.deleteServer(s)
             case .command(let c):
                 try library.deleteCommand(c)
+            case .credential(let c):
+                try library.deleteCredential(c)
             }
         }
     }
@@ -110,7 +125,26 @@ final class AppModel {
         pendingDeletion = .server(s, commandNames: library.commandsDeleted(with: s).map(\.name))
     }
 
+    /// 还有服务器在用的凭据直接提示，不进入删除确认。
+    func requestDelete(_ c: Credential) {
+        let users = library.servers(using: c)
+        if users.isEmpty {
+            pendingDeletion = .credential(c)
+        } else {
+            alert = AppAlert(title: "无法删除凭据“\(c.name)”",
+                             message: LibraryError.credentialInUse(serverNames: users.map(\.name)).errorDescription ?? "")
+        }
+    }
+
     // MARK: 其他
+
+    func copyPassword(_ c: Credential) {
+        clipboard.copy(c.password)
+    }
+
+    func showServer(_ s: Server) {
+        selection = .server(s.persistentModelID)
+    }
 
     func duplicate(_ s: Server) {
         perform {
@@ -133,6 +167,7 @@ final class AppModel {
     }
 
     private func show(_ error: Error) {
-        errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        alert = AppAlert(title: "出错了",
+                         message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
     }
 }

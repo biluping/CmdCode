@@ -9,7 +9,7 @@ struct DetailView: View {
     var body: some View {
         switch model.selection {
         case .credentials:
-            ContentUnavailableView("密码管理", systemImage: "key", description: Text("下一步实现"))
+            CredentialsView()
         case .server(let id):
             if let server = context.model(for: id) as? Server, !server.isDeleted {
                 ServerDetailView(server: server)
