@@ -335,8 +335,6 @@ private struct SectionRows: View {
             }
         } onToggle: { toggle() }
         .onTapGesture { if !isRenaming { toggle() } }
-        // 双击原地重命名；两次单击会展开又收起，状态不变。
-        .simultaneousGesture(TapGesture(count: 2).onEnded { startRenaming() })
         .contextMenu { groupMenu }
         .modifier(GroupDragSource(group: section.group))
         .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
