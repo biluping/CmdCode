@@ -69,7 +69,17 @@ enum Snapshot {
                 model.sheet = .editServer(seed.lims232)
             }),
             ("08-form-command", { model.sheet = .editCommand(seed.build) }),
-            ("09-toast", { model.showToast("已在终端中打开 · 232 - lims 主服务 / 构建") }),
+            ("09-toast", { model.showToast("已复制密码，60 秒后自动清除") }),
+            ("10-terminal", {
+                if model.sessions.isEmpty {
+                    model.open(demoSession("看日志", server: "135 - lims", production: true,
+                                           script: "for i in 1 2 3; do echo \"$(date +%T) INFO  request handled in ${i}2ms\"; done; sleep 600"))
+                    model.open(demoSession("重启服务", server: "232 - lims 主服务", production: false,
+                                           script: "echo 'Job for lims.service failed.'; exit 3"))
+                    model.open(demoSession("构建", server: "232 - lims 主服务", production: false, script: buildLog))
+                }
+                model.selection = .terminal
+            }),
         ]
 
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
@@ -89,10 +99,35 @@ enum Snapshot {
             }
             model.sheet = nil
             model.toast = nil
+            // 下一轮外观重新创建终端会话
+            model.hangUpAll()
+            model.sessions.removeAll()
             try? await Task.sleep(for: .milliseconds(500))
         }
+        model.hangUpAll()
+        model.sessions.removeAll()
         NSApp.terminate(nil)
     }
+
+    private static func demoSession(_ command: String, server: String, production: Bool, script: String) -> TerminalSession {
+        TerminalSession(serverName: server, commandName: command, isProduction: production,
+                        address: "root@10.0.144.232:2233", workingDirectory: "/usr/local/app/lims", plan: nil,
+                        launch: .init(executable: "/bin/bash", arguments: ["-c", script], environment: [:]))
+    }
+
+    /// 模拟一段带颜色的构建输出。
+    private static let buildLog = #"""
+    printf '\033[1;34m==>\033[0m 拉取代码\n'
+    printf 'Already up to date.\n'
+    printf '\033[1;34m==>\033[0m mvn -q package -DskipTests\n'
+    for m in lims-common lims-core lims-web lims-api; do printf '[\033[32mINFO\033[0m] Building %-12s \033[2m......\033[0m \033[32mSUCCESS\033[0m\n' $m; done
+    printf '[\033[33mWARN\033[0m] lims-web: 3 deprecation warnings\n'
+    printf '\033[1;34m==>\033[0m 重启服务\n'
+    printf 'lims.service: \033[1;32mactive (running)\033[0m since %s\n' "$(date '+%F %T')"
+    printf '\033[1;32mBUILD SUCCESS\033[0m  total time 42.3s\n'
+    printf 'done at %s\n' "$(date)"
+    sleep 600
+    """#
 
     private static func capture(_ window: NSWindow, to path: String) {
         // 取 contentView 的父视图，带上隐藏标题栏后的红黄绿按钮。

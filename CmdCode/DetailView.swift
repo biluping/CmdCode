@@ -10,6 +10,8 @@ struct DetailView: View {
         switch model.selection {
         case .credentials:
             CredentialsView()
+        case .terminal:
+            TerminalPane()
         case .server(let id):
             if let server = context.model(for: id) as? Server, !server.isDeleted {
                 ServerDetailView(server: server)

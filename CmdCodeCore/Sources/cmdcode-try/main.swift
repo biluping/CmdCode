@@ -2,6 +2,8 @@ import CmdCodeCore
 import Foundation
 
 let usage = """
+在当前终端里通过 ssh 执行一条命令（开发调试用）。
+
 用法：
   swift run cmdcode-try --host <主机> --user <用户名> [--port 22] [--dir <工作目录>] (--cmd <命令> | --test)
 
@@ -42,19 +44,21 @@ if let env = ProcessInfo.processInfo.environment["CMDCODE_PASSWORD"] {
 }
 
 let target = SSHTarget(host: host, port: port, username: user, password: password)
-let runner = CommandRunner()
-let removed = runner.store.cleanUpLeftovers()
-if removed > 0 { print("清理了 \(removed) 个遗留脚本") }
+let command = isTest ? ScriptBuilder.testConnectionCommand() : options["--cmd"]!.replacingOccurrences(of: "\\n", with: "\n")
+let plan = ExecutionPlan(target: target, command: command,
+                         workingDirectory: ScriptBuilder.normalizedWorkingDirectory(options["--dir"]),
+                         requiresConfirmation: false, serverName: host, commandName: isTest ? "测试连接" : "命令")
 
 do {
-    let url: URL
-    if isTest {
-        url = try await runner.testConnection(target: target, workingDirectory: options["--dir"])
-    } else {
-        let command = options["--cmd"]!.replacingOccurrences(of: "\\n", with: "\n")
-        url = try await runner.run(target: target, command: command, workingDirectory: options["--dir"])
-    }
-    print("已交给终端打开：\(url.lastPathComponent)")
+    // 在当前终端里直接运行 ssh（继承标准输入输出），效果和应用内终端一致。
+    let invocation = try CommandRunner().invocation(for: plan)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: invocation.executable)
+    process.arguments = invocation.arguments
+    process.environment = ProcessInfo.processInfo.environment.merging(invocation.environment) { $1 }
+    try process.run()
+    process.waitUntilExit()
+    exit(process.terminationStatus)
 } catch {
     fail((error as? LocalizedError)?.errorDescription ?? "\(error)")
 }

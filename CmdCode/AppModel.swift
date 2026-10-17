@@ -5,6 +5,8 @@ import SwiftData
 
 enum SidebarSelection: Hashable {
     case credentials
+    /// 右侧显示内嵌终端。
+    case terminal
     case server(PersistentIdentifier)
 }
 
@@ -62,8 +64,15 @@ final class AppModel {
     var pendingDeletion: PendingDeletion?
     /// 等待确认的执行。
     var pendingExecution: ExecutionPlan?
+    /// 确认后要替换掉的会话（“重新运行”时）。
+    @ObservationIgnored private var pendingReplacement: TerminalSession.ID?
+    /// 内嵌终端的会话，按打开顺序。
+    var sessions: [TerminalSession] = []
+    var activeSessionID: TerminalSession.ID?
+    /// 主窗口被关闭后重新打开它（由界面注入）。
+    @ObservationIgnored var reopenWindow: (() -> Void)?
     var alert: AppAlert?
-    /// 底部的短暂提示，比如“已在终端中打开”。
+    /// 底部的短暂提示，比如“已复制密码”。
     var toast: String?
     /// 左侧栏的展开状态。不持久化，每次启动全部折叠。
     var expandedSections: Set<SidebarSection.ID> = []
@@ -75,8 +84,6 @@ final class AppModel {
         self.library = library
         self.runner = runner
         self.clipboard = clipboard
-        // 启动时清理遗留的临时脚本（比如上次终端没能成功打开时），并检测 sshpass。
-        runner.store.cleanUpLeftovers()
         sshpassMissing = runner.locator.locate() == nil
     }
 
@@ -90,24 +97,77 @@ final class AppModel {
         perform { try prepare(server.testConnectionPlan()) }
     }
 
-    private func prepare(_ plan: ExecutionPlan) {
+    private func prepare(_ plan: ExecutionPlan, replacing: TerminalSession.ID? = nil) {
         if plan.requiresConfirmation {
+            pendingReplacement = replacing
             pendingExecution = plan
         } else {
-            execute(plan)
+            execute(plan, replacing: replacing)
         }
     }
 
-    func execute(_ plan: ExecutionPlan) {
+    /// 确认框点了“执行”。
+    func confirmExecution(_ plan: ExecutionPlan) {
+        let replacing = pendingReplacement
+        pendingReplacement = nil
+        execute(plan, replacing: replacing)
+    }
+
+    /// 在内嵌终端里新开一个标签执行；`replacing` 指定时原位替换那个标签（重新运行）。
+    private func execute(_ plan: ExecutionPlan, replacing: TerminalSession.ID? = nil) {
         pendingExecution = nil
-        Task {
-            do {
-                try await runner.run(plan)
-                showToast("已在终端中打开 · \(plan.title)")
-            } catch {
-                show(error)
-            }
+        perform {
+            let session = TerminalSession(plan: plan, invocation: try runner.invocation(for: plan))
+            open(session, replacing: replacing)
         }
+    }
+
+    func open(_ session: TerminalSession, replacing: TerminalSession.ID? = nil) {
+        if let replacing, let index = sessions.firstIndex(where: { $0.id == replacing }) {
+            sessions[index].hangUp()
+            sessions[index] = session
+        } else {
+            sessions.append(session)
+        }
+        activeSessionID = session.id
+        selection = .terminal
+        session.start()
+    }
+
+    // MARK: 终端会话
+
+    var activeSession: TerminalSession? {
+        sessions.first { $0.id == activeSessionID } ?? sessions.last
+    }
+
+    var runningSessionCount: Int {
+        sessions.filter(\.state.isRunning).count
+    }
+
+    /// 重新运行：生产环境照常先确认，确认后在原标签里重新开始。
+    func rerun(_ session: TerminalSession) {
+        guard let plan = session.plan else { return }
+        prepare(plan, replacing: session.id)
+    }
+
+    func close(_ session: TerminalSession) {
+        session.hangUp()
+        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+        sessions.remove(at: index)
+        if activeSessionID == session.id {
+            activeSessionID = sessions.indices.contains(index) ? sessions[index].id : sessions.last?.id
+        }
+        if sessions.isEmpty, selection == .terminal { selection = nil }
+    }
+
+    /// 关闭所有已结束的标签。
+    func closeFinished() {
+        for s in sessions where !s.state.isRunning { close(s) }
+    }
+
+    /// 退出应用前结束所有会话。
+    func hangUpAll() {
+        sessions.forEach { $0.hangUp() }
     }
 
     // MARK: 删除

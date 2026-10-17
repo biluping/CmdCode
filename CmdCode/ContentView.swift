@@ -5,6 +5,7 @@ import SwiftUI
 /// 主窗口：无标题栏，左侧磨砂侧栏，右侧白色内容区。
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     static let sidebarWidth: CGFloat = 264
 
     var body: some View {
@@ -40,6 +41,7 @@ struct ContentView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: model.isSearching)
+        .onAppear { model.reopenWindow = { openWindow(id: "main") } }
         .animation(.spring(duration: 0.3), value: model.toast)
         .sheet(item: $model.sheet) { route in
             SheetContent(route: route)
@@ -55,7 +57,7 @@ struct ContentView: View {
         } message: { Text($0.message) }
         .alert(executionTitle, isPresented: isPresent($model.pendingExecution),
                presenting: model.pendingExecution) { plan in
-            Button("执行") { model.execute(plan) }
+            Button("执行") { model.confirmExecution(plan) }
             Button("取消", role: .cancel) {}
         } message: { plan in
             Text("\(plan.target.username)@\(plan.target.host):\(plan.target.port)\n\n\(preview(plan.command))")

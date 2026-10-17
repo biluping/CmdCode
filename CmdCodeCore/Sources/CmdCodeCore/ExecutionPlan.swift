@@ -6,8 +6,24 @@ public struct ExecutionPlan: Sendable, Equatable {
     public var command: String
     public var workingDirectory: String?
     public var requiresConfirmation: Bool
-    /// 确认框里显示的标题，比如“232 - lims 主服务 / 构建”。
-    public var title: String
+    public var serverName: String
+    /// 命令名；测试连接时是“测试连接”。
+    public var commandName: String
+    public var isProduction: Bool
+
+    /// 确认框和终端标签上显示的标题，比如“232 - lims 主服务 / 构建”。
+    public var title: String { "\(serverName) / \(commandName)" }
+
+    public init(target: SSHTarget, command: String, workingDirectory: String?, requiresConfirmation: Bool,
+                serverName: String, commandName: String, isProduction: Bool = false) {
+        self.target = target
+        self.command = command
+        self.workingDirectory = workingDirectory
+        self.requiresConfirmation = requiresConfirmation
+        self.serverName = serverName
+        self.commandName = commandName
+        self.isProduction = isProduction
+    }
 }
 
 extension Server {
@@ -23,7 +39,7 @@ extension Server {
             command: ScriptBuilder.testConnectionCommand(),
             workingDirectory: ScriptBuilder.normalizedWorkingDirectory(workingDirectory),
             requiresConfirmation: false,
-            title: "\(name) / 测试连接")
+            serverName: name, commandName: "测试连接", isProduction: isProduction)
     }
 }
 
@@ -35,13 +51,6 @@ extension ServerCommand {
             command: content,
             workingDirectory: effectiveWorkingDirectory,
             requiresConfirmation: requiresConfirmation,
-            title: "\(server.name) / \(name)")
-    }
-}
-
-extension CommandRunner {
-    @discardableResult
-    public func run(_ plan: ExecutionPlan) async throws -> URL {
-        try await run(target: plan.target, command: plan.command, workingDirectory: plan.workingDirectory)
+            serverName: server.name, commandName: name, isProduction: server.isProduction)
     }
 }

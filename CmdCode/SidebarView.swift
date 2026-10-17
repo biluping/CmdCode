@@ -35,6 +35,22 @@ struct SidebarView: View {
                 } action: {
                     model.selection = .credentials
                 }
+
+                SidebarItem(icon: "terminal", title: "终端", selected: model.selection == .terminal) {
+                    if model.runningSessionCount > 0 {
+                        HStack(spacing: 5) {
+                            Circle().fill(Theme.success).frame(width: 6, height: 6)
+                            Text("\(model.runningSessionCount)")
+                        }
+                        .font(Theme.small)
+                        .foregroundStyle(.secondary)
+                        .help("\(model.runningSessionCount) 个命令正在运行")
+                    } else if !model.sessions.isEmpty {
+                        Text("\(model.sessions.count)").font(Theme.small).foregroundStyle(Theme.faint)
+                    }
+                } action: {
+                    model.selection = .terminal
+                }
             }
             .padding(.horizontal, 10)
 

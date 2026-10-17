@@ -212,7 +212,7 @@ struct LibraryTests {
         #expect(plan == ExecutionPlan(
             target: SSHTarget(host: "10.0.144.232", port: 2233, username: "root", password: "p'w"),
             command: "./build.sh\necho done", workingDirectory: "/usr/local/app/lims",
-            requiresConfirmation: false, title: "232 / 构建"))
+            requiresConfirmation: false, serverName: "232", commandName: "构建"))
 
         var d = CommandDraft(build)
         d.workingDirectory = "/tmp"
@@ -225,6 +225,8 @@ struct LibraryTests {
         #expect(log.confirmBeforeRun == false)
         #expect(try log.executionPlan().requiresConfirmation)
         #expect(try log.executionPlan().workingDirectory == nil)
+        #expect(try log.executionPlan().isProduction)
+        #expect(try log.executionPlan().title == "135 / 看日志")
 
         let test = try dev.testConnectionPlan()
         #expect(test.command == "whoami && pwd")

@@ -40,6 +40,7 @@ struct CmdCodeApp: App {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 820, minHeight: 520)
+                .onAppear { appDelegate.model = model }
                 #if DEBUG
                 .task {
                     if let dir = Snapshot.outputDirectory, let seed = snapshotSeed {
@@ -62,9 +63,35 @@ struct CmdCodeApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// 没有菜单栏图标、不常驻后台：关闭主窗口即退出。已经打开的终端窗口不受影响。
+    weak var model: AppModel?
+
+    /// 没有菜单栏图标、不常驻后台：关闭主窗口即退出。
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// 还有命令在运行时先确认；退出会结束它们（相当于关闭终端窗口）。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.runningSessionCount > 0 else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "还有 \(model.runningSessionCount) 个命令正在运行"
+        alert.informativeText = "退出后这些命令会被结束，远端的前台进程也会随之停止。"
+        alert.addButton(withTitle: "退出")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn {
+            model.hangUpAll()
+            return .terminateNow
+        }
+        // 关窗口触发的退出被取消时，把窗口重新打开；会话都还在。
+        if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) {
+            model.reopenWindow?()
+        }
+        return .terminateCancel
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        model?.hangUpAll()
     }
 }

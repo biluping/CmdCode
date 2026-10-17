@@ -23,7 +23,7 @@ fi
 
 echo "==> Release 构建"
 xcodebuild -project CmdCode.xcodeproj -scheme CmdCode -configuration Release \
-    -derivedDataPath "$DERIVED" clean build 2>&1 | grep -E 'error:|BUILD (SUCCEEDED|FAILED)'
+    -derivedDataPath "$DERIVED" -skipPackagePluginValidation clean build 2>&1 | grep -E 'error:|BUILD (SUCCEEDED|FAILED)'
 [ -d "$APP" ] || { echo "构建失败，找不到 $APP" >&2; exit 1; }
 
 echo "==> 检查签名"
