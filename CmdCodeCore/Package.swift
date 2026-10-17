@@ -11,6 +11,8 @@ let package = Package(
         .target(name: "CmdCodeCore"),
         // 开发期试用：不写界面，直接验证“生成脚本 → 终端打开 → 远端执行”整条链路。
         .executableTarget(name: "cmdcode-try", dependencies: ["CmdCodeCore"]),
+        // 一次性把 FinalShell 里的服务器导入 CmdCode 的数据库。
+        .executableTarget(name: "cmdcode-import", dependencies: ["CmdCodeCore"]),
         .testTarget(name: "CmdCodeCoreTests", dependencies: ["CmdCodeCore"]),
     ]
 )
