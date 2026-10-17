@@ -14,126 +14,247 @@ struct DetailView: View {
             if let server = context.model(for: id) as? Server, !server.isDeleted {
                 ServerDetailView(server: server)
             } else {
-                placeholder
+                WelcomeView()
             }
         case nil:
-            placeholder
+            WelcomeView()
         }
-    }
-
-    private var placeholder: some View {
-        ContentUnavailableView("选择一台服务器", systemImage: "server.rack",
-                               description: Text("在左侧展开服务器，点击命令即可在终端里执行"))
     }
 }
 
-/// 服务器详情和命令列表。
+/// 页面骨架：顶部栏 + 居中限宽的可滚动内容。
+struct Page<Actions: View, Content: View>: View {
+    let headerTitle: String
+    @ViewBuilder var actions: Actions
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ContentHeader(title: headerTitle) { actions }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) { content }
+                    .padding(.horizontal, 36)
+                    .padding(.top, 28)
+                    .padding(.bottom, 40)
+                    .frame(maxWidth: 860, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+// MARK: - 欢迎页
+
+private struct WelcomeView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ContentHeader(title: "CmdCode") { EmptyView() }
+            VStack(spacing: 18) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(Theme.faint)
+                VStack(spacing: 6) {
+                    Text("选择一台服务器").font(.system(size: 17, weight: .semibold))
+                    Text("在左侧展开服务器，点击命令即可在终端里执行")
+                        .font(Theme.body)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    shortcut("搜索服务器和命令", "⌘K")
+                    shortcut("新建服务器", "⌘N")
+                }
+                .padding(.top, 6)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func shortcut(_ title: String, _ key: String) -> some View {
+        HStack(spacing: 24) {
+            Text(title).font(Theme.body).foregroundStyle(.secondary)
+            Spacer()
+            KeyCap(text: key)
+        }
+        .frame(width: 220)
+    }
+}
+
+// MARK: - 服务器详情
+
 struct ServerDetailView: View {
     @Environment(AppModel.self) private var model
     let server: Server
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                header
-                info
-                commands
+        Page(headerTitle: [server.group?.name ?? Library.ungroupedTitle, server.name].joined(separator: " / ")) {
+            Button { model.testConnection(server) } label: {
+                Label("测试连接", systemImage: "bolt")
             }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(PillButtonStyle())
+            Button { model.sheet = .editServer(server) } label: { Image(systemName: "pencil") }
+                .buttonStyle(IconButtonStyle())
+                .help("编辑")
+            Menu {
+                Button("复制服务器") { model.duplicate(server) }
+                Divider()
+                Button("删除服务器", role: .destructive) { model.requestDelete(server) }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.button)
+            .buttonStyle(IconButtonStyle())
+            .menuIndicator(.hidden)
+            .fixedSize()
+        } content: {
+            header
+            info
+            commands
         }
-        .navigationTitle(server.name)
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(server.name)
-                .font(.title2.bold())
-                .foregroundStyle(server.isProduction ? Color.red : Color.primary)
-            if server.isProduction {
-                Text("生产环境")
-                    .font(.caption.bold())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.red.opacity(0.15), in: Capsule())
-                    .foregroundStyle(.red)
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(server.isProduction ? Theme.danger : .secondary)
+                .frame(width: 44, height: 44)
+                .background(RoundedRectangle(cornerRadius: 10)
+                    .fill(server.isProduction ? Theme.danger.opacity(0.1) : Theme.subtleFill))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.border))
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(server.name).font(Theme.title)
+                    if server.isProduction {
+                        Chip(text: "生产环境", systemImage: "exclamationmark.triangle.fill", tint: Theme.danger)
+                    }
+                }
+                Text(sshAddress)
+                    .font(Theme.mono)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
             }
-            Spacer()
-            Button("测试连接", systemImage: "bolt.horizontal") { model.testConnection(server) }
-            Button("编辑", systemImage: "pencil") { model.sheet = .editServer(server) }
         }
+    }
+
+    private var sshAddress: String {
+        "\(server.credential?.username ?? "?")@\(server.host):\(server.port)"
     }
 
     private var info: some View {
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-            row("主机", "\(server.host):\(server.port)")
-            row("登录凭据", server.credential.map { "\($0.name)（\($0.username)）" } ?? "未配置")
-            row("分组", server.group?.name ?? Library.ungroupedTitle)
-            row("工作目录", server.workingDirectory.isEmpty ? "—" : server.workingDirectory)
-            if !server.note.isEmpty { row("备注", server.note) }
+        VStack(spacing: 0) {
+            infoRow("主机", "\(server.host)", mono: true)
+            CardDivider()
+            infoRow("端口", "\(server.port)", mono: true)
+            CardDivider()
+            infoRow("登录凭据", server.credential.map { "\($0.name) · \($0.username)" } ?? "未配置")
+            CardDivider()
+            infoRow("分组", server.group?.name ?? Library.ungroupedTitle)
+            CardDivider()
+            infoRow("工作目录", server.workingDirectory.isEmpty ? "—" : server.workingDirectory, mono: !server.workingDirectory.isEmpty)
+            if !server.note.isEmpty {
+                CardDivider()
+                infoRow("备注", server.note)
+            }
         }
-        .textSelection(.enabled)
+        .card()
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
-        GridRow {
-            Text(title).foregroundStyle(.secondary)
+    private func infoRow(_ title: String, _ value: String, mono: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            Text(title)
+                .font(Theme.body)
+                .foregroundStyle(.secondary)
+                .frame(width: 72, alignment: .leading)
             Text(value)
+                .font(mono ? Theme.mono : Theme.body)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
     }
 
     private var commands: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("命令").font(.headline)
-                Spacer()
-                Button("新建命令", systemImage: "plus") { model.sheet = .newCommand(server) }
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle(title: "命令", count: server.commands.count) {
+                Button { model.sheet = .newCommand(server) } label: { Label("新建", systemImage: "plus") }
+                    .buttonStyle(PillButtonStyle())
             }
             if server.commands.isEmpty {
-                Text("还没有命令").foregroundStyle(.secondary)
-            }
-            ForEach(server.sortedCommands) { command in
-                CommandRow(command: command)
+                EmptyHint(text: "还没有命令")
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(server.sortedCommands.enumerated()), id: \.element.id) { index, command in
+                        if index > 0 { CardDivider() }
+                        CommandCardRow(command: command)
+                    }
+                }
+                .card()
             }
         }
     }
 }
 
-private struct CommandRow: View {
+private struct CommandCardRow: View {
     @Environment(AppModel.self) private var model
     let command: ServerCommand
+    @State private var hovering = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Button { model.run(command) } label: { Image(systemName: "play.fill") }
-                .help("执行")
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(command.name).bold()
+        HStack(alignment: .center, spacing: 12) {
+            IconTile(systemImage: "terminal")
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(command.name).font(Theme.bodyMedium)
                     if command.requiresConfirmation {
-                        Image(systemName: "exclamationmark.shield").foregroundStyle(.orange).help("执行前确认")
+                        Chip(text: "执行前确认", tint: .orange)
+                    }
+                    if let dir = ScriptBuilder.normalizedWorkingDirectory(command.workingDirectory) {
+                        Chip(text: dir, systemImage: "folder")
                     }
                 }
-                Text(command.content)
-                    .font(.system(.callout, design: .monospaced))
+                Text(summary)
+                    .font(Theme.mono)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                if let dir = ScriptBuilder.normalizedWorkingDirectory(command.workingDirectory) {
-                    Label(dir, systemImage: "folder").font(.caption).foregroundStyle(.secondary)
-                }
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer()
-            Button("编辑") { model.sheet = .editCommand(command) }
-            Button(role: .destructive) { model.pendingDeletion = .command(command) } label: {
-                Image(systemName: "trash")
+            Spacer(minLength: 8)
+            Button { model.run(command) } label: { Label("运行", systemImage: "play.fill") }
+                .buttonStyle(PrimaryButtonStyle())
+                .opacity(hovering ? 1 : 0)
+            Menu {
+                Button("编辑") { model.sheet = .editCommand(command) }
+                Button("复制") { model.duplicate(command) }
+                Divider()
+                Button("删除", role: .destructive) { model.pendingDeletion = .command(command) }
+            } label: {
+                Image(systemName: "ellipsis")
             }
-            .help("删除")
+            .menuStyle(.button)
+            .buttonStyle(IconButtonStyle())
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
-        .padding(10)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(hovering ? Theme.hover : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(count: 2) { model.run(command) }
         .contextMenu {
             Button("执行") { model.run(command) }
             Button("编辑") { model.sheet = .editCommand(command) }
             Button("复制") { model.duplicate(command) }
         }
+    }
+
+    /// 多行命令显示第一行，并标出总行数。
+    private var summary: String {
+        let lines = command.content.split(separator: "\n", omittingEmptySubsequences: true)
+        guard let first = lines.first else { return "" }
+        return lines.count > 1 ? "\(first)  … 共 \(lines.count) 行" : String(first)
     }
 }

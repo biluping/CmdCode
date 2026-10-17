@@ -8,16 +8,30 @@ struct CmdCodeApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     private let container: ModelContainer
     @State private var model: AppModel
+    #if DEBUG
+    private var snapshotSeed: Snapshot.Seed?
+    #endif
 
     init() {
         let container: ModelContainer
         do {
-            container = try Persistence.makeContainer()
+            #if DEBUG
+            let inMemory = Snapshot.outputDirectory != nil
+            #else
+            let inMemory = false
+            #endif
+            container = try Persistence.makeContainer(inMemory: inMemory)
         } catch {
             fatalError("无法打开数据库 \(Persistence.defaultStoreURL.path)：\(error)")
         }
         self.container = container
-        _model = State(initialValue: AppModel(library: Library(context: container.mainContext)))
+        let library = Library(context: container.mainContext)
+        _model = State(initialValue: AppModel(library: library))
+        #if DEBUG
+        if Snapshot.outputDirectory != nil {
+            snapshotSeed = try? Snapshot.seed(library)
+        }
+        #endif
     }
 
     var body: some Scene {
@@ -25,8 +39,17 @@ struct CmdCodeApp: App {
         Window("CmdCode", id: "main") {
             ContentView()
                 .environment(model)
-                .frame(minWidth: 760, minHeight: 480)
+                .frame(minWidth: 820, minHeight: 520)
+                #if DEBUG
+                .task {
+                    if let dir = Snapshot.outputDirectory, let seed = snapshotSeed {
+                        await Snapshot.run(model: model, seed: seed, directory: dir)
+                    }
+                }
+                #endif
         }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1100, height: 720)
         .modelContainer(container)
         .commands {
             CommandGroup(replacing: .newItem) {

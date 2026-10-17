@@ -58,10 +58,16 @@ final class AppModel {
     var sheet: SheetRoute?
     /// ⌘K 搜索浮层是否显示。
     var isSearching = false
+    var searchQuery = ""
     var pendingDeletion: PendingDeletion?
     /// 等待确认的执行。
     var pendingExecution: ExecutionPlan?
     var alert: AppAlert?
+    /// 底部的短暂提示，比如“已在终端中打开”。
+    var toast: String?
+    /// 左侧栏的展开状态。不持久化，每次启动全部折叠。
+    var expandedSections: Set<SidebarSection.ID> = []
+    var expandedServers: Set<PersistentIdentifier> = []
     var sshpassMissing: Bool
     let clipboard: SecretClipboard
 
@@ -97,6 +103,7 @@ final class AppModel {
         Task {
             do {
                 try await runner.run(plan)
+                showToast("已在终端中打开 · \(plan.title)")
             } catch {
                 show(error)
             }
@@ -144,8 +151,22 @@ final class AppModel {
         clipboard.copy(c.password)
     }
 
+    /// 选中服务器，并在左侧栏展开到它所在的位置。
     func showServer(_ s: Server) {
         selection = .server(s.persistentModelID)
+        expandedSections.insert(s.group.map { .group($0.persistentModelID) } ?? .ungrouped)
+        expandedServers.insert(s.persistentModelID)
+    }
+
+    @ObservationIgnored private var toastTask: Task<Void, Never>?
+
+    func showToast(_ text: String) {
+        toast = text
+        toastTask?.cancel()
+        toastTask = Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            if !Task.isCancelled { toast = nil }
+        }
     }
 
     func duplicate(_ s: Server) {

@@ -2,29 +2,45 @@ import CmdCodeCore
 import SwiftData
 import SwiftUI
 
+/// 主窗口：无标题栏，左侧磨砂侧栏，右侧白色内容区。
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    static let sidebarWidth: CGFloat = 264
 
     var body: some View {
         @Bindable var model = model
-        NavigationSplitView {
+        HStack(spacing: 0) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
-        } detail: {
+                .frame(width: Self.sidebarWidth)
+                .background(VisualEffectBackground(material: .sidebar))
+            Rectangle().fill(Theme.border).frame(width: 1)
             DetailView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.content)
         }
-        .overlay(alignment: .top) {
+        .ignoresSafeArea()
+        .overlay {
             if model.isSearching {
                 ZStack(alignment: .top) {
                     // 点击浮层外的区域关闭。
-                    Color.black.opacity(0.15)
+                    Color.black.opacity(0.12)
                         .ignoresSafeArea()
                         .onTapGesture { model.isSearching = false }
                     SearchPanel()
-                        .padding(.top, 60)
+                        .padding(.top, 72)
                 }
+                .transition(.opacity)
             }
         }
+        .overlay(alignment: .bottom) {
+            if let toast = model.toast {
+                ToastView(text: toast)
+                    .padding(.bottom, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: model.isSearching)
+        .animation(.spring(duration: 0.3), value: model.toast)
         .sheet(item: $model.sheet) { route in
             SheetContent(route: route)
                 .environment(model)
@@ -80,6 +96,23 @@ struct ContentView: View {
         let lines = command.split(separator: "\n", omittingEmptySubsequences: false)
         let head = lines.prefix(8).joined(separator: "\n")
         return lines.count > 8 ? head + "\n…" : head
+    }
+}
+
+private struct ToastView: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
+            Text(text).font(Theme.body).lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 34)
+        .background(VisualEffectBackground(material: .popover, blending: .withinWindow))
+        .clipShape(Capsule())
+        .overlay(Capsule().strokeBorder(Theme.border))
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
     }
 }
 

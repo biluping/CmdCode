@@ -2,33 +2,119 @@ import CmdCodeCore
 import SwiftData
 import SwiftUI
 
-/// 表单通用外壳：标题、内容、底部的取消/保存按钮和错误提示。
+/// 表单通用外壳：标题区、字段区、底部的错误提示与取消/保存按钮。
 private struct FormShell<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
+    var subtitle: String? = nil
     let error: String?
     let save: () -> Void
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text(title).font(.headline).padding(.top, 16)
-            Form { content }
-                .formStyle(.grouped)
-            HStack {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.system(size: 17, weight: .semibold))
+                if let subtitle {
+                    Text(subtitle).font(Theme.body).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 22)
+            .padding(.bottom, 18)
+
+            VStack(alignment: .leading, spacing: 16) { content }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 22)
+
+            Rectangle().fill(Theme.border).frame(height: 1)
+
+            HStack(spacing: 8) {
                 if let error {
-                    Text(error).foregroundStyle(.red).font(.callout)
+                    Label(error, systemImage: "exclamationmark.circle.fill")
+                        .font(Theme.small)
+                        .foregroundStyle(Theme.danger)
+                        .labelStyle(TightLabelStyle())
+                        .lineLimit(2)
                 }
                 Spacer()
-                Button("取消", role: .cancel) { dismiss() }
+                Button("取消") { dismiss() }
+                    .buttonStyle(PillButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button("保存", action: save)
+                    .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
-            .padding([.horizontal, .bottom], 16)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 14)
+            .background(Theme.subtleFill)
         }
-        .frame(width: 520)
+        .frame(width: 500)
+        .background(Theme.content)
     }
+}
+
+/// 外观与输入框一致的下拉选择。
+private struct ThemedPicker<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    @Binding var selection: Value
+    var placeholder = "请选择"
+
+    var body: some View {
+        Menu {
+            ForEach(options, id: \.value) { option in
+                Button(option.title) { selection = option.value }
+            }
+        } label: {
+            HStack {
+                Text(options.first { $0.value == selection }?.title ?? placeholder)
+                    .foregroundStyle(options.contains { $0.value == selection } ? .primary : Theme.faint)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(Theme.body)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.borderStrong))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+    }
+}
+
+/// 带说明文字的开关行。
+private struct ToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+    var tint: Color = .accentColor
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Theme.bodyMedium)
+                Text(detail).font(Theme.small).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("", isOn: $isOn)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(tint)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .card()
+    }
+}
+
+private func message(for error: Error) -> String {
+    (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
 }
 
 // MARK: - 服务器
@@ -41,34 +127,57 @@ struct ServerForm: View {
 
     let server: Server?
     @State private var draft: ServerDraft
+    @State private var portText: String
     @State private var error: String?
     @State private var creatingCredential = false
 
     init(server: Server?, presetGroup: ServerGroup?) {
         self.server = server
-        _draft = State(initialValue: server.map(ServerDraft.init) ?? ServerDraft(group: presetGroup))
+        let draft = server.map(ServerDraft.init) ?? ServerDraft(group: presetGroup)
+        _draft = State(initialValue: draft)
+        _portText = State(initialValue: String(draft.port))
     }
 
     var body: some View {
-        FormShell(title: server == nil ? "新建服务器" : "编辑服务器", error: error, save: save) {
-            TextField("名称", text: $draft.name, prompt: Text("比如：232 - lims 主服务"))
-            Picker("分组", selection: $draft.group) {
-                Text(Library.ungroupedTitle).tag(nil as ServerGroup?)
-                ForEach(groups) { Text($0.name).tag($0 as ServerGroup?) }
+        FormShell(title: server == nil ? "新建服务器" : "编辑服务器",
+                  subtitle: "通过 SSH 用户名 + 密码登录", error: error, save: save) {
+            FormField(title: "名称") {
+                ThemedTextField(placeholder: "比如：232 - lims 主服务", text: $draft.name)
             }
-            TextField("主机", text: $draft.host, prompt: Text("10.0.144.232"))
-            TextField("端口", value: $draft.port, format: .number.grouping(.never))
-            HStack {
-                Picker("登录凭据", selection: $draft.credential) {
-                    Text("请选择").tag(nil as Credential?)
-                    ForEach(credentials) { Text("\($0.name)（\($0.username)）").tag($0 as Credential?) }
+            HStack(alignment: .top, spacing: 12) {
+                FormField(title: "主机") {
+                    ThemedTextField(placeholder: "10.0.144.232", text: $draft.host, monospaced: true)
                 }
-                Button("新建…") { creatingCredential = true }
+                FormField(title: "端口") {
+                    ThemedTextField(placeholder: "22", text: $portText, monospaced: true)
+                }
+                .frame(width: 96)
             }
-            TextField("工作目录", text: $draft.workingDirectory, prompt: Text("可选，绝对路径，比如 /usr/local/app/lims"))
-            Toggle("生产环境", isOn: $draft.isProduction)
-            TextField("备注", text: $draft.note, axis: .vertical)
-                .lineLimit(2...4)
+            HStack(alignment: .top, spacing: 12) {
+                FormField(title: "登录凭据") {
+                    HStack(spacing: 6) {
+                        ThemedPicker(options: credentials.map { ($0 as Credential?, "\($0.name) · \($0.username)") },
+                                     selection: $draft.credential)
+                        Button { creatingCredential = true } label: { Image(systemName: "plus") }
+                            .buttonStyle(IconButtonStyle(size: 30))
+                            .help("新建凭据")
+                    }
+                }
+                FormField(title: "分组") {
+                    ThemedPicker(options: [(nil as ServerGroup?, Library.ungroupedTitle)]
+                                    + groups.map { ($0 as ServerGroup?, $0.name) },
+                                 selection: $draft.group)
+                }
+                .frame(width: 170)
+            }
+            FormField(title: "工作目录", hint: "可选，绝对路径；执行命令前会先 cd 进去") {
+                ThemedTextField(placeholder: "/usr/local/app/lims", text: $draft.workingDirectory, monospaced: true)
+            }
+            ToggleRow(title: "生产环境", detail: "红色显示，所有命令执行前强制确认",
+                      isOn: $draft.isProduction, tint: Theme.danger)
+            FormField(title: "备注") {
+                ThemedTextField(placeholder: "可选", text: $draft.note)
+            }
         }
         .sheet(isPresented: $creatingCredential) {
             CredentialForm(credential: nil) { draft.credential = $0 }
@@ -77,16 +186,21 @@ struct ServerForm: View {
     }
 
     private func save() {
+        guard let port = Int(portText.trimmingCharacters(in: .whitespaces)) else {
+            error = LibraryError.invalidPort.errorDescription
+            return
+        }
+        draft.port = port
         do {
             if let server {
                 try model.library.updateServer(server, with: draft)
             } else {
                 let s = try model.library.createServer(draft)
-                model.selection = .server(s.persistentModelID)
+                model.showServer(s)
             }
             dismiss()
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.error = message(for: error)
         }
     }
 }
@@ -101,6 +215,7 @@ struct CommandForm: View {
     let command: ServerCommand?
     @State private var draft: CommandDraft
     @State private var error: String?
+    @FocusState private var editorFocused: Bool
 
     init(server: Server?, command: ServerCommand?) {
         self.server = server
@@ -111,29 +226,33 @@ struct CommandForm: View {
     private var isProduction: Bool { server?.isProduction ?? false }
 
     var body: some View {
-        FormShell(title: command == nil ? "新建命令" : "编辑命令", error: error, save: save) {
-            if let server {
-                LabeledContent("服务器", value: server.name)
+        FormShell(title: command == nil ? "新建命令" : "编辑命令",
+                  subtitle: server.map { "服务器：\($0.name)" }, error: error, save: save) {
+            FormField(title: "名称") {
+                ThemedTextField(placeholder: "比如：构建、看日志", text: $draft.name)
             }
-            TextField("名称", text: $draft.name, prompt: Text("比如：构建、看日志"))
-            VStack(alignment: .leading, spacing: 6) {
-                Text("命令内容")
+            FormField(title: "命令内容", hint: "支持多行，原样执行，不做任何替换") {
                 TextEditor(text: $draft.content)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(minHeight: 160)
+                    .font(Theme.mono)
                     .scrollContentBackground(.hidden)
-                    .padding(4)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 6))
-                Text("支持多行，原样执行，不做任何替换")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .focused($editorFocused)
+                    .padding(6)
+                    .frame(height: 150)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 7))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .strokeBorder(editorFocused ? Color.accentColor.opacity(0.7) : Theme.borderStrong,
+                                          lineWidth: editorFocused ? 1.5 : 1))
             }
-            TextField("工作目录", text: $draft.workingDirectory, prompt: Text("可选，填了就覆盖服务器的工作目录"))
+            FormField(title: "工作目录", hint: "可选，填了就覆盖服务器的工作目录") {
+                ThemedTextField(placeholder: server?.workingDirectory.isEmpty == false ? "沿用服务器：\(server!.workingDirectory)" : "/usr/local/app",
+                                text: $draft.workingDirectory, monospaced: true)
+            }
             // 生产环境强制确认且不能关闭。
-            Toggle("执行前确认", isOn: isProduction ? .constant(true) : $draft.confirmBeforeRun)
+            ToggleRow(title: "执行前确认",
+                      detail: isProduction ? "生产环境服务器的命令总是需要确认" : "点击后先弹出确认框再执行",
+                      isOn: isProduction ? .constant(true) : $draft.confirmBeforeRun)
                 .disabled(isProduction)
-            if isProduction {
-                Text("生产环境服务器的命令总是需要确认").font(.caption).foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -143,10 +262,11 @@ struct CommandForm: View {
                 try model.library.updateCommand(command, with: draft)
             } else if let server {
                 try model.library.createCommand(draft, on: server)
+                model.expandedServers.insert(server.persistentModelID)
             }
             dismiss()
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.error = message(for: error)
         }
     }
 }
@@ -170,23 +290,27 @@ struct CredentialForm: View {
     }
 
     var body: some View {
-        FormShell(title: credential == nil ? "新建凭据" : "编辑凭据", error: error, save: save) {
-            TextField("名称", text: $draft.name, prompt: Text("比如：测试环境 root"))
-            TextField("用户名", text: $draft.username)
-            HStack {
-                if revealPassword {
-                    TextField("密码", text: $draft.password)
-                } else {
-                    SecureField("密码", text: $draft.password)
-                }
-                Button { revealPassword.toggle() } label: {
-                    Image(systemName: revealPassword ? "eye.slash" : "eye")
-                }
-                .buttonStyle(.borderless)
-                .help(revealPassword ? "隐藏密码" : "显示密码")
+        FormShell(title: credential == nil ? "新建凭据" : "编辑凭据",
+                  subtitle: "多台服务器可以共用，改一次密码全部生效", error: error, save: save) {
+            FormField(title: "名称") {
+                ThemedTextField(placeholder: "比如：测试环境 root", text: $draft.name)
             }
-            TextField("备注", text: $draft.note, axis: .vertical)
-                .lineLimit(2...4)
+            FormField(title: "用户名") {
+                ThemedTextField(placeholder: "root", text: $draft.username, monospaced: true)
+            }
+            FormField(title: "密码") {
+                HStack(spacing: 6) {
+                    ThemedTextField(placeholder: "", text: $draft.password, monospaced: true, secure: !revealPassword)
+                    Button { revealPassword.toggle() } label: {
+                        Image(systemName: revealPassword ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(IconButtonStyle(size: 30))
+                    .help(revealPassword ? "隐藏密码" : "显示密码")
+                }
+            }
+            FormField(title: "备注") {
+                ThemedTextField(placeholder: "可选", text: $draft.note)
+            }
         }
     }
 
@@ -202,7 +326,7 @@ struct CredentialForm: View {
             onSaved(saved)
             dismiss()
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.error = message(for: error)
         }
     }
 }
@@ -224,7 +348,9 @@ struct GroupNameForm: View {
 
     var body: some View {
         FormShell(title: group == nil ? "新建分组" : "重命名分组", error: error, save: save) {
-            TextField("名称", text: $name, prompt: Text("比如：LIMS 测试"))
+            FormField(title: "名称") {
+                ThemedTextField(placeholder: "比如：LIMS 测试", text: $name)
+            }
         }
     }
 
@@ -233,11 +359,12 @@ struct GroupNameForm: View {
             if let group {
                 try model.library.renameGroup(group, to: name)
             } else {
-                try model.library.createGroup(name: name)
+                let g = try model.library.createGroup(name: name)
+                model.expandedSections.insert(.group(g.persistentModelID))
             }
             dismiss()
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.error = message(for: error)
         }
     }
 }
