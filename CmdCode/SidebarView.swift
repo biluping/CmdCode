@@ -486,14 +486,9 @@ private struct CommandRow: View {
     var body: some View {
         TreeRow(depth: 2, isExpanded: nil, icon: hovering ? "play.fill" : "play",
                 iconTint: hovering ? .accentColor : Theme.faint, title: command.name) {
-            if command.requiresConfirmation {
-                Image(systemName: "exclamationmark.shield")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.orange)
-                    .help("执行前确认")
-            }
+            EmptyView()
         }
-        // 点击即执行；需要确认时 AppModel 会先弹出确认框。
+        // 点击后先弹出确认框，确认了才执行。
         .onTapGesture { model.run(command) }
         .onHover { hovering = $0 }
         .help(command.content)

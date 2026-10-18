@@ -41,7 +41,7 @@ swift run cmdcode-import --dry-run                                              
 - `Library.swift`：**所有数据修改的唯一入口**（增删改、拖动排序、复制、搜索、左侧栏分组组装 `SidebarSection.make`）。删除规则在这里实现：被引用的凭据不能删（`LibraryError.credentialInUse`）、删服务器级联删命令、删分组把服务器移到“未分组”（`group == nil`，固定排最后）。排序靠模型上的顺序字段，`Library.reorder` 统一重编号。
 - `Drafts.swift`：表单用的值类型草稿（`ServerDraft`、`CommandDraft`、`CredentialDraft`），校验后由 `Library` 写入模型。
 - 执行链路：`ServerCommand.executionPlan()` / `Server.testConnectionPlan()` / `Server.loginPlan()` → `ExecutionPlan`（不持有模型对象、`Sendable`）→ `CommandRunner.invocation(for:)` → `ScriptBuilder.sshInvocation` 产出 `SSHInvocation`（可执行文件路径、参数数组、环境变量）。
-- `ScriptBuilder.swift`：转义的核心。内层脚本 = 可选的 `cd -- <shq(目录)> || exit 1` + 命令原文（留在 shell 时再加 `trap : INT`、`bash -lc`、`exec "${SHELL:-bash}" -l`），整体 base64 后拼成 `bash -lc "$(printf %s <b64> | base64 -d)"` 作为 ssh 最后一个参数。密码只走 `SSHPASS` 环境变量，不进参数、不落盘、不写临时文件。不要改成 `cd && 命令` 或经 stdin 喂脚本——原因见需求文档 3.4。
+- `ScriptBuilder.swift`：转义的核心。内层脚本 = 可选的 `cd -- <shq(目录)> || exit 1` + 命令原文（留在 shell 时再加 `trap : INT`、`bash -lc`、`exec "${SHELL:-bash}" -l`；命令和登录都留在 shell，只有测试连接不留），整体 base64 后拼成 `bash -lc "$(printf %s <b64> | base64 -d)"` 作为 ssh 最后一个参数。密码只走 `SSHPASS` 环境变量，不进参数、不落盘、不写临时文件。不要改成 `cd && 命令` 或经 stdin 喂脚本——原因见需求文档 3.4。
 - `ScriptBuilderTests` 是往返测试：用本地 `bash -c` 代替 ssh，对比执行结果与直接执行原命令是否一致（`Tests/.../Shell.swift` 是辅助）。改 `ScriptBuilder` 必须保证这些用例全过，新增转义场景时加用例。
 - `RemoteFiles.swift`：远程文件的列目录、读、写（需求文档 3.5）。同样经 `ScriptBuilder.remoteCommand(script:)` 发脚本，但用 `ssh -T`（不分配终端），写入内容走 stdin，远端 `cat` 覆盖原文件以保留权限和 inode，保存时比对 `cksum` 防冲突。上传下载走同样的通道，流式读写本地文件（不进内存），支持进度和取消。文件操作用非登录 shell，并开启 ssh 连接复用（ControlMaster，socket 在 `/tmp/cmdcode-<uid>/`，关文件标签和退出应用时 `ssh -O exit`）。测试用假的 sshpass 在本地 bash 上往返（它不认 ssh 参数，测不到连接复用；本机是 BSD `stat`，列目录的 GNU 分支只能在真实 Linux 服务器上验证）。
 - 其他：`SecretClipboard`（复制密码 60 秒后清除）、`FinalShellImport`（解析 FinalShell 的 conn 目录，供 `cmdcode-import` 用）。
@@ -53,7 +53,7 @@ swift run cmdcode-import --dry-run                                              
 - 右侧标签页：`AppModel.tabs` 是 `WorkspaceTab`（`.terminal(TerminalSession)` 或 `.files(FileBrowserModel)`）的数组，`TerminalPane.swift` 画统一的标签栏并按类型显示内容。
 - `TerminalSession.swift`：每次执行一个 `TerminalSession`（SwiftTerm 视图 + pty 里的 sshpass 进程）；关闭标签给进程组发 SIGHUP，中断发 Ctrl-C。输出不保存。
 - `FileBrowserModel.swift` / `FileBrowserView.swift`：文件标签，每台服务器一个（按 `serverID` 查找），切走再回来保留目录和编辑内容。`-snapshot` 时 `AppModel.makeFileClient` 换成本地假 sshpass。
-- `SidebarView.swift`：三层树（分组 → 服务器 → 命令）、拖动排序、右键菜单、原地重命名分组。`DetailView` 是服务器详情，`CredentialsView` 是密码管理，`SearchPanel` 是 ⌘K 搜索，`ExecutionConfirmView` 是执行确认面板（生产环境服务器强制确认），`Forms.swift` 是各编辑表单，`Theme.swift` 是统一的颜色和控件样式。
+- `SidebarView.swift`：三层树（分组 → 服务器 → 命令）、拖动排序、右键菜单、原地重命名分组。`DetailView` 是服务器详情，`CredentialsView` 是密码管理，`SearchPanel` 是 ⌘K 搜索，`ExecutionConfirmView` 是执行确认面板（所有命令都先确认，生产环境红色强调），`Forms.swift` 是各编辑表单，`Theme.swift` 是统一的颜色和控件样式。
 
 ## 工作方式
 

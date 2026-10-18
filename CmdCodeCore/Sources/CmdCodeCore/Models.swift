@@ -97,28 +97,17 @@ public final class ServerCommand {
     public var content: String
     /// 空字符串表示沿用服务器的工作目录。
     public var workingDirectory: String
-    public var confirmBeforeRun: Bool
-    /// 执行完不断开，留在远端的交互 shell 里。
-    public var stayInShell: Bool = false
     public var createdAt: Date
     /// 在所属服务器内的位置（拖动排序），相同时按创建时间。
     public var sortOrder: Int = 0
 
     public var server: Server?
 
-    public init(name: String, content: String, workingDirectory: String = "", confirmBeforeRun: Bool = false,
-                stayInShell: Bool = false) {
+    public init(name: String, content: String, workingDirectory: String = "") {
         self.name = name
         self.content = content
         self.workingDirectory = workingDirectory
-        self.confirmBeforeRun = confirmBeforeRun
-        self.stayInShell = stayInShell
         self.createdAt = CreationClock.next()
-    }
-
-    /// 生产环境服务器上的命令强制确认。
-    public var requiresConfirmation: Bool {
-        confirmBeforeRun || (server?.isProduction ?? false)
     }
 
     /// 命令自己的工作目录优先，否则用服务器的；都没有返回 nil。

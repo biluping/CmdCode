@@ -45,15 +45,28 @@ struct TerminalPane: View {
     }
 
     private var tabCloseTitle: String {
-        guard let b = model.pendingTabClose else { return "" }
-        return "关闭“\(b.serverName)”的文件标签？"
+        guard let list = model.pendingTabClose else { return "" }
+        guard list.count == 1, let tab = list.first else { return "关闭 \(list.count) 个标签？" }
+        switch tab {
+        case .terminal(let s): return "关闭“\(s.title)”？"
+        case .files(let b): return "关闭“\(b.serverName)”的文件标签？"
+        }
     }
 
     private var tabCloseMessage: String {
-        guard let b = model.pendingTabClose else { return "" }
+        guard let list = model.pendingTabClose else { return "" }
         var lines: [String] = []
-        if b.isDirty, let path = b.openedPath { lines.append("\(path) 的修改还没有保存，关闭后会丢失。") }
-        if let t = b.transfer { lines.append("\(t.name) 正在\(t.kind == .upload ? "上传" : "下载")，关闭会取消传输。") }
+        let running = list.compactMap(\.session).filter(\.state.isRunning)
+        if running.count == 1 {
+            lines.append("“\(running[0].title)”还连着服务器，关闭会断开并结束远端进程。")
+        } else if running.count > 1 {
+            lines.append("\(running.count) 个终端还连着服务器，关闭会断开并结束远端进程。")
+        }
+        for b in list.compactMap(\.browser) {
+            if b.isDirty, let path = b.openedPath { lines.append("\(path) 的修改还没有保存，关闭后会丢失。") }
+            if let t = b.transfer { lines.append("\(t.name) 正在\(t.kind == .upload ? "上传" : "下载")，关闭会取消传输。") }
+        }
+        if lines.isEmpty, list.contains(where: { $0.session != nil }) { lines.append("终端输出不会保留。") }
         return lines.joined(separator: "\n")
     }
 
@@ -219,8 +232,8 @@ private struct TabItem: View {
 
     private var closeHelp: String {
         switch tab {
-        case .terminal(let s): s.state.isRunning ? "关闭并结束远端进程" : "关闭"
-        case .files(let b): b.isDirty ? "关闭（有未保存的修改，会先确认）" : "关闭"
+        case .terminal(let s): s.state.isRunning ? "关闭并结束远端进程（会先确认）" : "关闭（会先确认）"
+        case .files(let b): b.isDirty ? "关闭（有未保存的修改，会先确认）" : "关闭（会先确认）"
         }
     }
 }

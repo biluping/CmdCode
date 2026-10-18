@@ -138,7 +138,7 @@ struct LibraryTests {
         let g = try lib.createGroup(name: "LIMS 测试")
         let s = try server("232", credential: c, group: g, production: true, dir: "/opt")
         try lib.createCommand(CommandDraft(name: "a", content: "echo a"), on: s)
-        try lib.createCommand(CommandDraft(name: "b", content: "echo b", confirmBeforeRun: true), on: s)
+        try lib.createCommand(CommandDraft(name: "b", content: "echo b", workingDirectory: "/tmp"), on: s)
 
         let copy = try lib.duplicateServer(s)
         #expect(copy.name == "232 副本")
@@ -146,7 +146,7 @@ struct LibraryTests {
         #expect(copy.credential === c)
         #expect(copy.isProduction && copy.workingDirectory == "/opt" && copy.port == 2233)
         #expect(copy.sortedCommands.map(\.name) == ["a", "b"])
-        #expect(copy.sortedCommands.map(\.confirmBeforeRun) == [false, true])
+        #expect(copy.sortedCommands.map(\.workingDirectory) == ["", "/tmp"])
         #expect(s.commands.count == 2)
 
         let cmd = try lib.duplicateCommand(s.sortedCommands[0])
@@ -310,25 +310,18 @@ struct LibraryTests {
         #expect(plan == ExecutionPlan(
             target: SSHTarget(host: "10.0.144.232", port: 2233, username: "root", password: "p'w"),
             command: "./build.sh\necho done", workingDirectory: "/usr/local/app/lims",
-            requiresConfirmation: false, serverName: "232", commandName: "构建"))
+            requiresConfirmation: true, serverName: "232", commandName: "构建", stayInShell: true))
 
         var d = CommandDraft(build)
         d.workingDirectory = "/tmp"
-        d.confirmBeforeRun = true
         try lib.updateCommand(build, with: d)
         #expect(try build.executionPlan().workingDirectory == "/tmp")
-        #expect(try build.executionPlan().requiresConfirmation)
 
+        // 命令一律先确认、执行完留在远端 shell，不分是否生产环境。
         let log = try lib.createCommand(CommandDraft(name: "看日志", content: "tail -f x"), on: prod)
-        #expect(log.confirmBeforeRun == false)
         #expect(try log.executionPlan().requiresConfirmation)
+        #expect(try log.executionPlan().stayInShell)
         #expect(try log.executionPlan().workingDirectory == nil)
-
-        d.stayInShell = true
-        try lib.updateCommand(build, with: d)
-        #expect(try build.executionPlan().stayInShell)
-        #expect(try lib.duplicateCommand(build).stayInShell)
-        #expect(try log.executionPlan().stayInShell == false)
 
         let login = try dev.loginPlan()
         #expect(login.command == "" && login.stayInShell && !login.requiresConfirmation)

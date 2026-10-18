@@ -63,8 +63,9 @@ extension ServerCommand {
             target: try server.sshTarget(),
             command: content,
             workingDirectory: effectiveWorkingDirectory,
-            requiresConfirmation: requiresConfirmation,
+            // 命令一律先确认，执行完留在远端 shell 里。
+            requiresConfirmation: true,
             serverName: server.name, commandName: name, isProduction: server.isProduction,
-            stayInShell: stayInShell)
+            stayInShell: true)
     }
 }

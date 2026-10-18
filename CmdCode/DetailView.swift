@@ -218,12 +218,6 @@ private struct CommandCardRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(command.name).font(Theme.bodyMedium)
-                    if command.requiresConfirmation {
-                        Chip(text: "执行前确认", tint: .orange)
-                    }
-                    if command.stayInShell {
-                        Chip(text: "留在 shell", systemImage: "terminal")
-                    }
                     if let dir = ScriptBuilder.normalizedWorkingDirectory(command.workingDirectory) {
                         Chip(text: dir, systemImage: "folder")
                     }

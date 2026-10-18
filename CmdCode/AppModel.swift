@@ -97,8 +97,8 @@ final class AppModel {
     /// 右侧的标签，按打开顺序。
     var tabs: [WorkspaceTab] = []
     var activeTabID: UUID?
-    /// 关闭前要确认的文件标签（有未保存的修改或正在传输）。
-    var pendingTabClose: FileBrowserModel?
+    /// 等待确认关闭的标签：关闭单个、关闭其他、关闭已结束的终端都先确认。
+    var pendingTabClose: [WorkspaceTab]?
     /// 主窗口被关闭后重新打开它（由界面注入）。
     @ObservationIgnored var reopenWindow: (() -> Void)?
     /// 生成远程文件客户端（截图自检时换成本地假的 sshpass）。
@@ -224,30 +224,36 @@ final class AppModel {
         tabs.first { $0.id == activeTabID } ?? tabs.last
     }
 
-    /// 关闭标签：终端直接结束；文件有未保存的修改或正在传输时先确认。
+    /// 关闭标签：先确认。
     func close(_ tab: WorkspaceTab) {
-        switch tab {
-        case .terminal(let s): close(s)
-        case .files(let b):
-            if b.isDirty || b.transfer != nil { pendingTabClose = b } else { removeTab(b.id) }
-        }
+        requestClose([tab])
     }
 
-    /// 确认关闭文件标签：取消传输、放弃未保存的修改。
-    func confirmTabClose() {
-        guard let b = pendingTabClose else { return }
-        pendingTabClose = nil
-        b.cancelTransfer()
-        removeTab(b.id)
-    }
-
-    /// 关闭其他标签；需要确认的文件标签保留。
+    /// 关闭其他标签：先确认。
     func closeOthers(than tab: WorkspaceTab) {
-        for other in tabs where other.id != tab.id {
-            switch other {
-            case .terminal(let s): close(s)
-            case .files(let b): if !b.isDirty && b.transfer == nil { removeTab(b.id) }
+        requestClose(tabs.filter { $0.id != tab.id })
+    }
+
+    /// 关闭所有已结束的终端：先确认。
+    func closeFinished() {
+        requestClose(sessions.filter { !$0.state.isRunning }.map { .terminal($0) })
+    }
+
+    private func requestClose(_ list: [WorkspaceTab]) {
+        guard !list.isEmpty else { return }
+        pendingTabClose = list
+    }
+
+    /// 确认关闭：终端结束远端进程，文件取消传输、放弃未保存的修改。
+    func confirmTabClose() {
+        guard let list = pendingTabClose else { return }
+        pendingTabClose = nil
+        for tab in list {
+            switch tab {
+            case .terminal(let s): s.hangUp()
+            case .files(let b): b.cancelTransfer()
             }
+            removeTab(tab.id)
         }
     }
 
@@ -283,15 +289,6 @@ final class AppModel {
         prepare(plan, replacing: session.id)
     }
 
-    func close(_ session: TerminalSession) {
-        session.hangUp()
-        removeTab(session.id)
-    }
-
-    /// 关闭所有已结束的标签。
-    func closeFinished() {
-        for s in sessions where !s.state.isRunning { close(s) }
-    }
 
     /// 退出应用前结束所有会话和传输。
     func hangUpAll() {

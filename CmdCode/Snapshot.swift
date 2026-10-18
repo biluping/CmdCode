@@ -32,7 +32,7 @@ enum Snapshot {
                                                     credential: test, workingDirectory: "/usr/local/app/lims", note: "主测试环境，每天构建"))
         let build = try lib.createCommand(CommandDraft(name: "构建", content: "./build.sh\necho \"done at $(date)\""), on: s232)
         try lib.createCommand(CommandDraft(name: "看日志", content: "tail -f logs/lims.log", workingDirectory: "/var/log/lims"), on: s232)
-        try lib.createCommand(CommandDraft(name: "重启服务", content: "systemctl restart lims && systemctl status lims", confirmBeforeRun: true), on: s232)
+        try lib.createCommand(CommandDraft(name: "重启服务", content: "systemctl restart lims && systemctl status lims"), on: s232)
         try lib.createServer(ServerDraft(name: "233 - lims 备机", group: limsTest, host: "10.0.144.233", credential: test))
 
         let s135 = try lib.createServer(ServerDraft(name: "135 - lims", group: limsProd, host: "10.0.144.135",

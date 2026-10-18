@@ -173,7 +173,7 @@ struct ServerForm: View {
             FormField(title: "工作目录", hint: "可选，绝对路径；执行命令前会先 cd 进去") {
                 ThemedTextField(placeholder: "/usr/local/app/lims", text: $draft.workingDirectory, monospaced: true)
             }
-            ToggleRow(title: "生产环境", detail: "红色显示，所有命令执行前强制确认",
+            ToggleRow(title: "生产环境", detail: "红色显示，执行确认和保存文件时额外提醒",
                       isOn: $draft.isProduction, tint: Theme.danger)
             FormField(title: "备注") {
                 ThemedTextField(placeholder: "可选", text: $draft.note)
@@ -223,7 +223,6 @@ struct CommandForm: View {
         _draft = State(initialValue: command.map(CommandDraft.init) ?? CommandDraft())
     }
 
-    private var isProduction: Bool { server?.isProduction ?? false }
 
     var body: some View {
         FormShell(title: command == nil ? "新建命令" : "编辑命令",
@@ -248,14 +247,6 @@ struct CommandForm: View {
                 ThemedTextField(placeholder: server?.workingDirectory.isEmpty == false ? "沿用服务器：\(server!.workingDirectory)" : "/usr/local/app",
                                 text: $draft.workingDirectory, monospaced: true)
             }
-            // 生产环境强制确认且不能关闭。
-            ToggleRow(title: "执行前确认",
-                      detail: isProduction ? "生产环境服务器的命令总是需要确认" : "点击后先弹出确认框再执行",
-                      isOn: isProduction ? .constant(true) : $draft.confirmBeforeRun)
-                .disabled(isProduction)
-            ToggleRow(title: "执行完留在 shell",
-                      detail: "命令结束或按 Ctrl-C 后不断开，继续在服务器上输入命令",
-                      isOn: $draft.stayInShell)
         }
     }
 
