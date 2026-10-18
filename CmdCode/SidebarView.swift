@@ -64,7 +64,8 @@ struct SidebarView: View {
             .padding(.bottom, 4)
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
+                // 不用 LazyVStack：放置后换 id 重建行时，LazyVStack 里的行会卡在过渡中不显示。
+                VStack(alignment: .leading, spacing: 1) {
                     ForEach(SidebarSection.make(groups: groups, servers: servers)) { section in
                         SectionRows(section: section, groups: groups)
                     }
@@ -220,7 +221,16 @@ private struct TreeDropDelegate: DropDelegate {
             model.dragging = nil
         }
         guard let item = model.dragging, let spot = indicator else { return false }
-        withAnimation(.easeOut(duration: 0.15)) { perform(item, spot) }
+        // 等这次拖放在 AppKit 里收尾后再改数据，并换 id 重建可拖动的行（见 `treeDraggable`）。
+        // 不做动画：重建的行接不上旧行的位移动画，只会和系统拖动图像叠成重影。
+        DispatchQueue.main.async {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                perform(item, spot)
+                model.dropGeneration += 1
+            }
+        }
         return true
     }
 
@@ -230,12 +240,18 @@ private struct TreeDropDelegate: DropDelegate {
 }
 
 private extension View {
-    /// 拖动来源：开始拖动时记下拖的是什么。
-    func treeDraggable(_ model: AppModel, _ item: @escaping () -> DragItem) -> some View {
+    /// 拖动来源：开始拖动时记下拖的是什么。拖动图像用半透明的小标签，不用整行截图——
+    /// 松手时系统会让拖动图像在原地淡出，整行截图叠在落到新位置的那一行上像重影。
+    func treeDraggable(_ model: AppModel, title: String, icon: String, _ item: @escaping () -> DragItem) -> some View {
         onDrag {
             model.dragging = item()
             return NSItemProvider(object: "cmdcode-sidebar" as NSString)
+        } preview: {
+            DragPreview(title: title, icon: icon)
         }
+        // macOS 上 SwiftUI 的 onDrag 拖过一次后，同一行再拖时不再调用闭包，沿用已被放置消费掉的
+        // NSItemProvider：拖得起来，但哪里都放不下。每次放置后换 id 让行重建，拖动状态从头开始。
+        .id(model.dropGeneration)
     }
 
     /// 放置位置的提示：上/下方一条强调色细线，放进去时整行描边高亮。
@@ -266,6 +282,24 @@ private extension View {
         .frame(height: 6)
         .offset(y: 0)
         .allowsHitTesting(false)
+    }
+}
+
+/// 拖动时跟着鼠标的小标签：图标 + 名称，半透明胶囊。
+private struct DragPreview: View {
+    let title: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 11))
+            Text(title).font(Theme.small).lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .frame(height: 22)
+        .background(Capsule().fill(Color.accentColor.opacity(0.75)))
+        .fixedSize()
     }
 }
 
@@ -320,10 +354,12 @@ private struct SectionRows: View {
         }
     }
 
-    /// 分组拖到分组上：插到它前面（拖到“未分组”上即排到最后）。服务器拖到分组上：放进这个分组。
+    /// 分组拖到分组上：插到它前面或后面（展开时只能插到前面，避免插进它的服务器中间；拖到“未分组”上即排到最后）。
+    /// 服务器拖到分组上：放进这个分组。
     private func spot(_ item: DragItem, _ y: CGFloat) -> DropSpot? {
         switch item {
-        case .group(let g): g === section.group ? nil : .above
+        case .group(let g):
+            if g === section.group { nil } else if section.group == nil || isExpanded { .above } else { half(y) }
         case .server: .into
         case .command: nil
         }
@@ -384,7 +420,7 @@ private struct GroupDragSource: ViewModifier {
 
     func body(content: Content) -> some View {
         if let group {
-            content.treeDraggable(model) { .group(group) }
+            content.treeDraggable(model, title: group.name, icon: "folder") { .group(group) }
         } else {
             content
         }
@@ -420,7 +456,7 @@ private struct ServerRows: View {
             }
         }
         .contextMenu { serverMenu }
-        .treeDraggable(model) { .server(server) }
+        .treeDraggable(model, title: server.name, icon: "server.rack") { .server(server) }
         .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
             model.drop(item, onServer: server, spot: spot)
         })
@@ -500,7 +536,7 @@ private struct CommandRow: View {
             Divider()
             Button("删除", role: .destructive) { model.pendingDeletion = .command(command) }
         }
-        .treeDraggable(model) { .command(command) }
+        .treeDraggable(model, title: command.name, icon: "play") { .command(command) }
         .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
             model.drop(item, onCommand: command, spot: spot)
         })

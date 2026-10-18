@@ -113,6 +113,8 @@ final class AppModel {
     var renamingGroup: PersistentIdentifier?
     /// 正在拖动的内容（拖动只在左侧栏内部进行，不需要真正序列化）。
     @ObservationIgnored var dragging: DragItem?
+    /// 每次拖动放置后加一，左侧栏可拖动的行用它当 id 重建（见 `treeDraggable`）。
+    var dropGeneration = 0
     var sshpassMissing: Bool
     let clipboard: SecretClipboard
 
@@ -377,14 +379,17 @@ final class AppModel {
 
     // MARK: 拖动排序
 
-    /// 放到分组标题上：分组插到它前面（“未分组”即最后）；服务器放进这个分组的最后。
+    /// 放到分组标题上：分组插到它前面或后面（“未分组”即最后）；服务器放进这个分组的最后。
     func drop(_ item: DragItem, onSection target: ServerGroup?, spot: DropSpot) {
         perform {
             switch item {
             case .group(let g):
                 let groups = library.groups()
-                let index = target.flatMap { t in groups.firstIndex { $0 === t } } ?? groups.count
-                try library.moveGroup(g, to: index)
+                guard let index = target.flatMap({ t in groups.firstIndex { $0 === t } }) else {
+                    try library.moveGroup(g, to: groups.count)   // 拖到“未分组”上：排到最后
+                    return
+                }
+                try library.moveGroup(g, to: spot == .below ? index + 1 : index)
             case .server(let s):
                 try library.moveServer(s, to: target)
                 expandedSections.insert(target.map { .group($0.persistentModelID) } ?? .ungrouped)
