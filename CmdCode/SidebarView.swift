@@ -18,12 +18,6 @@ struct SidebarView: View {
             .background(WindowDragArea())
 
             VStack(spacing: 2) {
-                Button { model.sheet = .newServer(group: nil) } label: {
-                    Label("新建服务器", systemImage: "plus")
-                }
-                .buttonStyle(SidebarProminentButtonStyle())
-                .padding(.bottom, 6)
-
                 SidebarItem(icon: "magnifyingglass", title: "搜索") {
                     KeyCap(text: "⌘K")
                 } action: {
@@ -78,6 +72,11 @@ struct SidebarView: View {
                 .padding(.bottom, 12)
             }
             .scrollIndicators(.never)
+            // 列表空白处右键；分组和服务器行有自己的菜单。
+            .contextMenu {
+                Button("新建服务器") { model.sheet = .newServer(group: nil) }
+                Button("新建分组") { model.sheet = .newGroup }
+            }
 
             footer
         }
@@ -104,43 +103,6 @@ struct SidebarView: View {
 }
 
 // MARK: - 顶部条目
-
-/// 侧栏顶部的“新建服务器”：带描边的整行按钮。
-private struct SidebarProminentButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        ProminentBody(configuration: configuration)
-    }
-
-    private struct ProminentBody: View {
-        let configuration: Configuration
-        @State private var hovering = false
-
-        var body: some View {
-            configuration.label
-                .font(Theme.body)
-                .labelStyle(SidebarLabelStyle())
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .frame(height: 32)
-                .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(configuration.isPressed ? Theme.selected : hovering ? Theme.card.opacity(0.9) : Theme.card.opacity(0.6)))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.borderStrong))
-                .contentShape(Rectangle())
-                .onHover { hovering = $0 }
-        }
-    }
-}
-
-private struct SidebarLabelStyle: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 8) {
-            configuration.icon
-                .font(.system(size: 13))
-                .frame(width: 16)
-            configuration.title
-        }
-    }
-}
 
 private struct SidebarItem<Trailing: View>: View {
     let icon: String
