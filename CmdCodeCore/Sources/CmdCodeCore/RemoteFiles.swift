@@ -110,11 +110,26 @@ public enum RemoteFileScript {
         shopt -s dotglob nullglob
         if stat -c %s / >/dev/null 2>&1; then _gnu=1; else _gnu=; fi
         printf '%s\\0' "$PWD"
+        if [ -n "$_gnu" ]; then
+          # GNU：所有条目一次 stat（每个条目 fork 一次，上千个文件就要一秒多）。按顺序输出“大小 时间 名字”，
+          # 名字对不上的（列完之后被删了）记 0 0，留着这条给后面的条目比对。
+          _ok=(); for f in *; do [ -e "$f" ] && _ok+=("$f"); done
+          exec 3< <([ ${#_ok[@]} -gt 0 ] && printf '%s\\0' "${_ok[@]}" | xargs -0 stat -L --printf '%s %Y %n\\0' -- 2>/dev/null)
+          _rec=; _have=
+        fi
         for f in *; do
           if [ -L "$f" ]; then l=1; else l=0; fi
           if [ -d "$f" ]; then t=d; elif [ -f "$f" ]; then t=f; else t=o; fi
           if [ -w "$f" ]; then w=1; else w=0; fi
-          if [ -n "$_gnu" ]; then m=$(stat -L -c '%s %Y' -- "$f" 2>/dev/null); else m=$(stat -L -f '%z %m' -- "$f" 2>/dev/null); fi
+          m=
+          if [ -n "$_gnu" ]; then
+            if [ -e "$f" ]; then
+              [ -n "$_have" ] || { IFS= read -r -d '' _rec <&3 && _have=1; }
+              if [ -n "$_have" ] && [ "${_rec#* * }" = "$f" ]; then m=${_rec%% * *}; _r2=${_rec#* }; m="$m ${_r2%% *}"; _have=; fi
+            fi
+          else
+            m=$(stat -L -f '%z %m' -- "$f" 2>/dev/null)
+          fi
           printf '%s %s %s %s %s\\0' "$t" "$l" "$w" "${m:-0 0}" "$f"
         done
         """
@@ -250,16 +265,70 @@ public struct RemoteFileClient: Sendable {
     public var target: SSHTarget
     public var sshpassPath: String
     public var timeout: TimeInterval
+    /// 连接复用的控制 socket 目录；nil 表示每次新建连接（测试用的假 sshpass 不认 ssh 参数）。
+    public var controlDirectory: String?
 
-    public init(target: SSHTarget, sshpassPath: String, timeout: TimeInterval = 30) {
+    /// 控制 socket 放在 /tmp 下的短路径里：macOS 的 socket 路径上限是 104 字节。
+    public static let defaultControlDirectory = "/tmp/cmdcode-\(getuid())"
+
+    public init(target: SSHTarget, sshpassPath: String, timeout: TimeInterval = 30, controlDirectory: String? = nil) {
         self.target = target
         self.sshpassPath = sshpassPath
         self.timeout = timeout
+        self.controlDirectory = controlDirectory
     }
 
     public init(target: SSHTarget, locator: SSHPassLocator = SSHPassLocator()) throws {
         guard let path = locator.locate() else { throw RemoteFileError.sshpassNotFound }
-        self.init(target: target, sshpassPath: path)
+        self.init(target: target, sshpassPath: path, controlDirectory: Self.defaultControlDirectory)
+    }
+
+    /// `%C` 是 ssh 自己算的“本机+主机+端口+用户”哈希，换了主机、端口或用户就是另一条连接。
+    var controlPath: String? { controlDirectory.map { "\($0)/%C" } }
+
+    /// 关掉这台服务器的复用连接（关文件标签时）。没有连接时什么也不做。
+    public func closeSharedConnection() {
+        guard let controlPath else { return }
+        Self.exitMaster(["-o", "ControlPath=\(controlPath)", "-p", String(target.port),
+                         "-l", target.username, "--", target.host])
+    }
+
+    /// 关掉目录里所有复用连接（退出应用时）。
+    public static func closeAllSharedConnections(in directory: String = defaultControlDirectory) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+        for name in names {
+            exitMaster(["-o", "ControlPath=\(directory)/\(name)", "--", "cmdcode"])
+        }
+    }
+
+    /// `ssh -O exit` 只和本机的主连接进程通信，不连服务器、不需要密码，很快返回。
+    private static func exitMaster(_ arguments: [String]) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        p.arguments = ["-O", "exit", "-o", "LogLevel=QUIET"] + arguments
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return }
+        p.waitUntilExit()
+    }
+
+    /// 建目录并只留给自己（0700），别的用户不能借用这些已认证的连接。
+    private func prepareControlDirectory() throws {
+        guard let controlDirectory else { return }
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        if !fm.fileExists(atPath: controlDirectory, isDirectory: &isDir) {
+            try fm.createDirectory(atPath: controlDirectory, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+        }
+        let attrs = try fm.attributesOfItem(atPath: controlDirectory)
+        guard (attrs[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
+            throw RemoteFileError.local("\(controlDirectory) 不属于当前用户，无法复用连接")
+        }
+        if (attrs[.posixPermissions] as? NSNumber)?.intValue != 0o700 {
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: controlDirectory)
+        }
     }
 
     public func list(directory: String?) async throws -> RemoteDirectoryListing {
@@ -343,9 +412,11 @@ public struct RemoteFileClient: Sendable {
     }
 
     private func run(_ script: String, options: ProcessOptions = ProcessOptions()) async throws -> ProcessResult {
+        try prepareControlDirectory()
         let invocation = ScriptBuilder.sshInvocation(
             target: target, sshpassPath: sshpassPath,
-            remoteCommand: ScriptBuilder.remoteCommand(script: script), allocateTTY: false)
+            remoteCommand: ScriptBuilder.remoteCommand(script: script, loginShell: false), allocateTTY: false,
+            controlPath: controlPath)
         var env = invocation.environment
         // sshpass 通过 PATH 找 ssh。
         env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"

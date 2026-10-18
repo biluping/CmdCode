@@ -261,6 +261,11 @@ final class AppModel {
 
     private func removeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if let b = tabs[index].browser {
+            // 文件标签关了就不再需要这台服务器的复用连接。
+            let client = b.client
+            Task.detached { client.closeSharedConnection() }
+        }
         tabs.remove(at: index)
         if activeTabID == id {
             activeTabID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
@@ -292,6 +297,7 @@ final class AppModel {
     func hangUpAll() {
         sessions.forEach { $0.hangUp() }
         fileBrowsers.forEach { $0.cancelTransfer() }
+        RemoteFileClient.closeAllSharedConnections()
     }
 
     // MARK: 删除

@@ -79,9 +79,10 @@ public enum ScriptBuilder {
         remoteCommand(script: innerScript(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell))
     }
 
-    /// 任意内层脚本对应的远端命令。远程文件操作用它直接传自己生成的脚本。
-    public static func remoteCommand(script: String) -> String {
-        "bash -lc \"$(printf %s \(base64(script)) | base64 -d)\""
+    /// 任意内层脚本对应的远端命令。远程文件操作用它直接传自己生成的脚本，并且用非登录 shell（`bash -c`），
+    /// 省掉加载 /etc/profile、~/.bash_profile 的时间；文件脚本只用基础命令，不依赖 profile 里的 PATH。
+    public static func remoteCommand(script: String, loginShell: Bool = true) -> String {
+        "bash -\(loginShell ? "l" : "")c \"$(printf %s \(base64(script)) | base64 -d)\""
     }
 
     /// 测试连接用的命令。
@@ -109,26 +110,35 @@ public enum ScriptBuilder {
 
     /// 同上，远端命令已经拼好。`allocateTTY` 为 false 时用 `-T`：不分配远端终端，
     /// stdin/stdout 是干净的字节流，远程文件读写用这种方式。
+    ///
+    /// `controlPath` 不为 nil 时开启连接复用（ControlMaster）：第一次照常连接认证，之后的 ssh 走这条连接，
+    /// 不再握手和认证；空闲 `controlPersist` 秒后主连接自己退出。
     public static func sshInvocation(
         target: SSHTarget,
         sshpassPath: String,
         remoteCommand: String,
-        allocateTTY: Bool
+        allocateTTY: Bool,
+        controlPath: String? = nil,
+        controlPersist: Int = 300
     ) -> SSHInvocation {
-        SSHInvocation(
-            executable: sshpassPath,
-            arguments: [
-                "-e", "ssh", allocateTTY ? "-t" : "-T",
-                "-p", String(target.port),
-                "-o", "ConnectTimeout=10",
-                "-o", "ServerAliveInterval=30",
-                "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/dev/null",
-                "-o", "LogLevel=ERROR",
-                "-l", target.username,
-                "--", target.host,
-                remoteCommand,
-            ],
-            environment: ["SSHPASS": target.password])
+        var arguments = [
+            "-e", "ssh", allocateTTY ? "-t" : "-T",
+            "-p", String(target.port),
+            "-o", "ConnectTimeout=10",
+            "-o", "ServerAliveInterval=30",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+        ]
+        if let controlPath {
+            arguments += [
+                "-o", "ControlMaster=auto",
+                "-o", "ControlPath=\(controlPath)",
+                "-o", "ControlPersist=\(controlPersist)",
+            ]
+        }
+        arguments += ["-l", target.username, "--", target.host, remoteCommand]
+        return SSHInvocation(executable: sshpassPath, arguments: arguments,
+                             environment: ["SSHPASS": target.password])
     }
 }

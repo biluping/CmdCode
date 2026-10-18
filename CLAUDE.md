@@ -43,7 +43,7 @@ swift run cmdcode-import --dry-run                                              
 - 执行链路：`ServerCommand.executionPlan()` / `Server.testConnectionPlan()` / `Server.loginPlan()` → `ExecutionPlan`（不持有模型对象、`Sendable`）→ `CommandRunner.invocation(for:)` → `ScriptBuilder.sshInvocation` 产出 `SSHInvocation`（可执行文件路径、参数数组、环境变量）。
 - `ScriptBuilder.swift`：转义的核心。内层脚本 = 可选的 `cd -- <shq(目录)> || exit 1` + 命令原文（留在 shell 时再加 `trap : INT`、`bash -lc`、`exec "${SHELL:-bash}" -l`），整体 base64 后拼成 `bash -lc "$(printf %s <b64> | base64 -d)"` 作为 ssh 最后一个参数。密码只走 `SSHPASS` 环境变量，不进参数、不落盘、不写临时文件。不要改成 `cd && 命令` 或经 stdin 喂脚本——原因见需求文档 3.4。
 - `ScriptBuilderTests` 是往返测试：用本地 `bash -c` 代替 ssh，对比执行结果与直接执行原命令是否一致（`Tests/.../Shell.swift` 是辅助）。改 `ScriptBuilder` 必须保证这些用例全过，新增转义场景时加用例。
-- `RemoteFiles.swift`：远程文件的列目录、读、写（需求文档 3.5）。同样经 `ScriptBuilder.remoteCommand(script:)` 发脚本，但用 `ssh -T`（不分配终端），写入内容走 stdin，远端 `cat` 覆盖原文件以保留权限和 inode，保存时比对 `cksum` 防冲突。上传下载走同样的通道，流式读写本地文件（不进内存），支持进度和取消。测试用假的 sshpass 在本地 bash 上往返。
+- `RemoteFiles.swift`：远程文件的列目录、读、写（需求文档 3.5）。同样经 `ScriptBuilder.remoteCommand(script:)` 发脚本，但用 `ssh -T`（不分配终端），写入内容走 stdin，远端 `cat` 覆盖原文件以保留权限和 inode，保存时比对 `cksum` 防冲突。上传下载走同样的通道，流式读写本地文件（不进内存），支持进度和取消。文件操作用非登录 shell，并开启 ssh 连接复用（ControlMaster，socket 在 `/tmp/cmdcode-<uid>/`，关文件标签和退出应用时 `ssh -O exit`）。测试用假的 sshpass 在本地 bash 上往返（它不认 ssh 参数，测不到连接复用；本机是 BSD `stat`，列目录的 GNU 分支只能在真实 Linux 服务器上验证）。
 - 其他：`SecretClipboard`（复制密码 60 秒后清除）、`FinalShellImport`（解析 FinalShell 的 conn 目录，供 `cmdcode-import` 用）。
 
 ### CmdCode（App）

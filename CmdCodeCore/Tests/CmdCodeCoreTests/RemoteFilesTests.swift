@@ -310,4 +310,23 @@ struct RemoteFilesTests {
         #expect(ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", command: "c", workingDirectory: nil)
             .arguments.prefix(3) == ["-e", "ssh", "-t"])
     }
+
+    @Test("连接复用：给了 controlPath 才加 ControlMaster 参数，且在主机之前；文件操作用非登录 shell")
+    func connectionReuse() throws {
+        let t = SSHTarget(host: "h", username: "u", password: "p")
+        let plain = ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", remoteCommand: "c", allocateTTY: false)
+        #expect(!plain.arguments.contains { $0.hasPrefix("Control") })
+        let shared = ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", remoteCommand: "c", allocateTTY: false,
+                                                  controlPath: "/tmp/d/%C")
+        #expect(shared.arguments.contains("ControlMaster=auto"))
+        #expect(shared.arguments.contains("ControlPath=/tmp/d/%C"))
+        #expect(shared.arguments.contains("ControlPersist=300"))
+        let dashes = try #require(shared.arguments.firstIndex(of: "--"))
+        #expect(shared.arguments.firstIndex(of: "ControlMaster=auto")! < dashes)
+        #expect(shared.arguments.suffix(2) == ["h", "c"])
+        #expect(ScriptBuilder.remoteCommand(script: "x", loginShell: false).hasPrefix("bash -c "))
+        #expect(ScriptBuilder.remoteCommand(script: "x").hasPrefix("bash -lc "))
+        // socket 路径留够余量：目录 + 40 位哈希 + ssh 建 socket 时临时加的后缀，要在 104 字节以内。
+        #expect(RemoteFileClient.defaultControlDirectory.utf8.count + 1 + 40 + 20 < 104)
+    }
 }
