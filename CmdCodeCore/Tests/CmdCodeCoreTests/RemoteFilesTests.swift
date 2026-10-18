@@ -160,6 +160,128 @@ struct RemoteFilesTests {
         await #expect(throws: RemoteFileError.tooLarge(path: big, size: size)) { try await client.read(path: big) }
     }
 
+    // MARK: 上传下载
+
+    private func randomData(_ count: Int) -> Data {
+        Data((0..<count).map { _ in UInt8.random(in: 0...255) })
+    }
+
+    @Test("下载：二进制内容逐字节一致，覆盖已有文件，不留临时文件，进度到 100%")
+    func download() async throws {
+        let base = try Shell.makeTempDir()
+        let remote = base + "/远程 it's.bin"
+        let bytes = randomData(3_000_000)
+        try bytes.write(to: URL(fileURLWithPath: remote))
+        let localDir = base + "/本地 目录"
+        try Shell.mkdir(localDir)
+        let dest = URL(fileURLWithPath: localDir + "/a.bin")
+        try Data("old".utf8).write(to: dest)
+
+        let last = TransferCounter()
+        try await makeClient(base: base).download(path: remote, to: dest) { done, total in
+            last.total = total
+            last.add(Int(done - last.bytes))
+        }
+        #expect(try Data(contentsOf: dest) == bytes)
+        #expect(last.bytes == 3_000_000 && last.total == 3_000_000)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: localDir) == ["a.bin"])
+    }
+
+    @Test("下载空文件；下载不存在的文件不产生本地文件")
+    func downloadEdgeCases() async throws {
+        let base = try Shell.makeTempDir()
+        let client = try makeClient(base: base)
+        try Data().write(to: URL(fileURLWithPath: base + "/empty"))
+        try Shell.mkdir(base + "/out")
+        try await client.download(path: base + "/empty", to: URL(fileURLWithPath: base + "/out/empty"))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: base + "/out/empty")).isEmpty)
+
+        await #expect(throws: RemoteFileError.self) {
+            try await client.download(path: base + "/nope", to: URL(fileURLWithPath: base + "/out/nope"))
+        }
+        await #expect(throws: RemoteFileError.notRegularFile(base)) {
+            try await client.download(path: base, to: URL(fileURLWithPath: base + "/out/dir"))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: base + "/out") == ["empty"])
+    }
+
+    @Test("上传新文件；已存在时不覆盖；允许覆盖时权限和 inode 不变")
+    func upload() async throws {
+        let base = try Shell.makeTempDir()
+        let client = try makeClient(base: base)
+        let local = URL(fileURLWithPath: base + "/local.bin")
+        let bytes = randomData(2_000_000)
+        try bytes.write(to: local)
+        let dir = base + "/远程 $dir"
+        try Shell.mkdir(dir)
+
+        let target = dir + "/新 'file'.bin"
+        try await client.upload(from: local, to: target, overwrite: false)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: target)) == bytes)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir) == ["新 'file'.bin"])
+
+        let existing = dir + "/app.conf"
+        try Data("old".utf8).write(to: URL(fileURLWithPath: existing))
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: existing)
+        let inode = try FileManager.default.attributesOfItem(atPath: existing)[.systemFileNumber] as? Int
+        // 远端在读 stdin 之前就退出，2MB 写不进去：不能因为 SIGPIPE 崩溃。
+        await #expect(throws: RemoteFileError.alreadyExists(existing)) {
+            try await client.upload(from: local, to: existing, overwrite: false)
+        }
+        #expect(try String(contentsOfFile: existing, encoding: .utf8) == "old")
+
+        try await client.upload(from: local, to: existing, overwrite: true)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: existing)) == bytes)
+        let attrs = try FileManager.default.attributesOfItem(atPath: existing)
+        #expect(attrs[.posixPermissions] as? Int == 0o640)
+        #expect(attrs[.systemFileNumber] as? Int == inode)
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: dir)) == ["新 'file'.bin", "app.conf"])
+    }
+
+    @Test("上传到只读文件、不存在的目录")
+    func uploadErrors() async throws {
+        let base = try Shell.makeTempDir()
+        let client = try makeClient(base: base)
+        let local = URL(fileURLWithPath: base + "/local")
+        try randomData(500_000).write(to: local)
+        let ro = base + "/ro"
+        try Data("r".utf8).write(to: URL(fileURLWithPath: ro))
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: ro)
+        await #expect(throws: RemoteFileError.notWritable(ro)) {
+            try await client.upload(from: local, to: ro, overwrite: true)
+        }
+        await #expect {
+            try await client.upload(from: local, to: base + "/nope/x", overwrite: false)
+        } throws: { error in
+            guard case .remote(_, let message) = error as? RemoteFileError else { return false }
+            return message.contains("目录不存在")
+        }
+    }
+
+    @Test("保存大内容遇到冲突时不会因 SIGPIPE 崩溃")
+    func bigWriteConflict() async throws {
+        let base = try Shell.makeTempDir()
+        let path = base + "/f"
+        try Data("v1".utf8).write(to: URL(fileURLWithPath: path))
+        await #expect(throws: RemoteFileError.conflict(path)) {
+            try await makeClient(base: base).write(randomData(1_000_000), to: path, expectedChecksum: "0 0")
+        }
+    }
+
+    @Test("取消下载：抛 CancellationError，不留文件")
+    func cancelDownload() async throws {
+        let base = try Shell.makeTempDir()
+        try randomData(1_000_000).write(to: URL(fileURLWithPath: base + "/big"))
+        try Shell.mkdir(base + "/out")
+        let client = try makeClient(base: base)
+        let task = Task {
+            try await client.download(path: base + "/big", to: URL(fileURLWithPath: base + "/out/big"))
+        }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: base + "/out").isEmpty)
+    }
+
     // MARK: 纯函数
 
     @Test func pathHelpers() {

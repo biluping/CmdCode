@@ -1,25 +1,60 @@
 import AppKit
 import CmdCodeCore
+import SwiftData
 import SwiftUI
 
-/// 右侧的内嵌终端：顶部标签栏、终端本体、底部状态栏。
+/// 右侧的标签页：顶部标签栏，下面是当前标签的内容——终端（带底部状态栏）或远程文件。
 struct TerminalPane: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.modelContext) private var context
 
     var body: some View {
+        @Bindable var model = model
         VStack(spacing: 0) {
             tabBar
-            if let session = model.activeSession {
+            switch model.activeTab {
+            case .terminal(let session):
                 TerminalHost(session: session)
                     .id(session.id)
                     .padding(.leading, 10)
                     .padding(.top, 6)
                     .background(Theme.content)
                 StatusBar(session: session)
-            } else {
+            case .files(let browser):
+                if let server = server(for: browser) {
+                    FileBrowserView(server: server, browser: browser)
+                        .id(browser.id)
+                } else {
+                    empty
+                }
+            case nil:
                 empty
             }
         }
+        .alert(tabCloseTitle, isPresented: isPresent($model.pendingTabClose)) {
+            Button("关闭", role: .destructive) { model.confirmTabClose() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(tabCloseMessage)
+        }
+    }
+
+    private func server(for browser: FileBrowserModel) -> Server? {
+        guard let server = context.model(for: browser.serverID) as? Server, !server.isDeleted else { return nil }
+        return server
+    }
+
+    private var tabCloseTitle: String {
+        guard let b = model.pendingTabClose else { return "" }
+        return "关闭“\(b.serverName)”的文件标签？"
+    }
+
+    private var tabCloseMessage: String {
+        guard let b = model.pendingTabClose else { return "" }
+        var lines: [String] = []
+        if b.isDirty, let path = b.openedPath { lines.append("\(path) 的修改还没有保存，关闭后会丢失。") }
+        if let t = b.transfer { lines.append("\(t.name) 正在\(t.kind == .upload ? "上传" : "下载")，关闭会取消传输。") }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: 标签栏
@@ -29,21 +64,23 @@ struct TerminalPane: View {
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     HStack(spacing: 2) {
-                        ForEach(model.sessions) { session in
-                            TabItem(session: session, isActive: session.id == model.activeSession?.id)
-                                .id(session.id)
+                        ForEach(model.tabs) { tab in
+                            TabItem(tab: tab, isActive: tab.id == model.activeTab?.id)
+                                .id(tab.id)
                         }
                     }
                     .padding(.horizontal, 8)
                 }
                 .scrollIndicators(.never)
-                .onChange(of: model.activeSessionID) {
-                    if let id = model.activeSessionID { withAnimation { proxy.scrollTo(id) } }
+                .onChange(of: model.activeTabID) {
+                    if let id = model.activeTabID { withAnimation { proxy.scrollTo(id) } }
                 }
             }
             Spacer(minLength: 0)
-            if let session = model.activeSession {
-                actions(for: session)
+            switch model.activeTab {
+            case .terminal(let session): actions(for: session)
+            case .files(let browser): actions(for: browser)
+            case nil: EmptyView()
             }
         }
         .padding(.trailing, 10)
@@ -63,9 +100,26 @@ struct TerminalPane: View {
             Button { model.rerun(session) } label: { Label("重新运行", systemImage: "arrow.clockwise") }
                 .buttonStyle(PillButtonStyle())
         }
+        moreMenu(closing: .terminal(session))
+    }
+
+    @ViewBuilder
+    private func actions(for browser: FileBrowserModel) -> some View {
+        if let server = server(for: browser) {
+            Button { model.showServer(server) } label: { Image(systemName: "server.rack") }
+                .buttonStyle(IconButtonStyle())
+                .help("服务器详情")
+            Button { model.login(server) } label: { Image(systemName: "terminal") }
+                .buttonStyle(IconButtonStyle())
+                .help("登录服务器（新开终端标签）")
+        }
+        moreMenu(closing: .files(browser))
+    }
+
+    private func moreMenu(closing tab: WorkspaceTab) -> some View {
         Menu {
-            Button("关闭当前标签") { model.close(session) }
-            Button("关闭已结束的标签") { model.closeFinished() }
+            Button("关闭当前标签") { model.close(tab) }
+            Button("关闭已结束的终端") { model.closeFinished() }
                 .disabled(!model.sessions.contains { !$0.state.isRunning })
         } label: {
             Image(systemName: "ellipsis")
@@ -81,8 +135,8 @@ struct TerminalPane: View {
             Image(systemName: "terminal")
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.faint)
-            Text("还没有运行的命令").font(.system(size: 15, weight: .semibold))
-            Text("在左侧点击命令，就会在这里打开一个终端标签")
+            Text("还没有打开的标签").font(.system(size: 15, weight: .semibold))
+            Text("在左侧点击命令会打开终端标签，在服务器上选“浏览文件”会打开文件标签")
                 .font(Theme.body)
                 .foregroundStyle(.secondary)
         }
@@ -94,27 +148,39 @@ struct TerminalPane: View {
 
 private struct TabItem: View {
     @Environment(AppModel.self) private var model
-    let session: TerminalSession
+    let tab: WorkspaceTab
     let isActive: Bool
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 7) {
-            StatusDot(state: session.state)
-            Text(session.commandName)
-                .font(isActive ? Theme.bodyMedium : Theme.body)
-                .lineLimit(1)
-            Text(session.serverName)
-                .font(Theme.small)
-                .foregroundStyle(session.isProduction ? Theme.danger : .secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Button { model.close(session) } label: {
+            switch tab {
+            case .terminal(let session):
+                StatusDot(state: session.state)
+                Text(session.commandName)
+                    .font(isActive ? Theme.bodyMedium : Theme.body)
+                    .lineLimit(1)
+                serverLabel(session.serverName, production: session.isProduction)
+            case .files(let browser):
+                Image(systemName: browser.transfer == nil ? "folder.fill" : "arrow.up.arrow.down.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 10)
+                Text("文件")
+                    .font(isActive ? Theme.bodyMedium : Theme.body)
+                    .lineLimit(1)
+                serverLabel(browser.serverName, production: browser.isProduction)
+                if browser.isDirty {
+                    Circle().fill(Color.orange).frame(width: 6, height: 6)
+                        .help("有未保存的修改")
+                }
+            }
+            Button { model.close(tab) } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
             }
             .buttonStyle(IconButtonStyle(size: 18))
             .opacity(hovering || isActive ? 1 : 0)
-            .help(session.state.isRunning ? "关闭并结束远端进程" : "关闭")
+            .help(closeHelp)
         }
         .padding(.leading, 10)
         .padding(.trailing, 4)
@@ -124,17 +190,37 @@ private struct TabItem: View {
             .fill(isActive ? Theme.selected : hovering ? Theme.hover : .clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { model.activeSessionID = session.id }
-        .help(session.title)
+        .onTapGesture { model.activeTabID = tab.id }
+        .help(title)
         .contextMenu {
-            if session.plan != nil {
+            if let session = tab.session, session.plan != nil {
                 Button("重新运行") { model.rerun(session) }
+                Divider()
             }
-            Divider()
-            Button("关闭") { model.close(session) }
-            Button("关闭其他标签") {
-                for other in model.sessions where other.id != session.id { model.close(other) }
-            }
+            Button("关闭") { model.close(tab) }
+            Button("关闭其他标签") { model.closeOthers(than: tab) }
+        }
+    }
+
+    private func serverLabel(_ name: String, production: Bool) -> some View {
+        Text(name)
+            .font(Theme.small)
+            .foregroundStyle(production ? Theme.danger : .secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
+    private var title: String {
+        switch tab {
+        case .terminal(let s): s.title
+        case .files(let b): "\(b.serverName) / 文件" + (b.listing.map { "：\($0.path)" } ?? "")
+        }
+    }
+
+    private var closeHelp: String {
+        switch tab {
+        case .terminal(let s): s.state.isRunning ? "关闭并结束远端进程" : "关闭"
+        case .files(let b): b.isDirty ? "关闭（有未保存的修改，会先确认）" : "关闭"
         }
     }
 }

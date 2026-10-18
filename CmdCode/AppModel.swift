@@ -5,11 +5,30 @@ import SwiftData
 
 enum SidebarSelection: Hashable {
     case credentials
-    /// 右侧显示内嵌终端。
-    case terminal
+    /// 右侧显示标签页（终端和远程文件）。
+    case tabs
     case server(PersistentIdentifier)
-    /// 服务器的远程文件浏览。
-    case files(PersistentIdentifier)
+}
+
+/// 右侧的一个标签：一次命令执行的终端，或一台服务器的远程文件。
+enum WorkspaceTab: Identifiable {
+    case terminal(TerminalSession)
+    case files(FileBrowserModel)
+
+    var id: UUID {
+        switch self {
+        case .terminal(let s): s.id
+        case .files(let b): b.id
+        }
+    }
+
+    var session: TerminalSession? {
+        if case .terminal(let s) = self { s } else { nil }
+    }
+
+    var browser: FileBrowserModel? {
+        if case .files(let b) = self { b } else { nil }
+    }
 }
 
 /// 弹出的编辑表单。
@@ -75,13 +94,13 @@ final class AppModel {
     var pendingExecution: ExecutionPlan?
     /// 确认后要替换掉的会话（“重新运行”时）。
     @ObservationIgnored private var pendingReplacement: TerminalSession.ID?
-    /// 内嵌终端的会话，按打开顺序。
-    var sessions: [TerminalSession] = []
-    var activeSessionID: TerminalSession.ID?
+    /// 右侧的标签，按打开顺序。
+    var tabs: [WorkspaceTab] = []
+    var activeTabID: UUID?
+    /// 关闭前要确认的文件标签（有未保存的修改或正在传输）。
+    var pendingTabClose: FileBrowserModel?
     /// 主窗口被关闭后重新打开它（由界面注入）。
     @ObservationIgnored var reopenWindow: (() -> Void)?
-    /// 远程文件浏览的状态，按服务器保存。
-    var fileBrowsers: [PersistentIdentifier: FileBrowserModel] = [:]
     /// 生成远程文件客户端（截图自检时换成本地假的 sshpass）。
     @ObservationIgnored var makeFileClient: (SSHTarget) throws -> RemoteFileClient = { try RemoteFileClient(target: $0) }
     var alert: AppAlert?
@@ -145,49 +164,108 @@ final class AppModel {
     }
 
     func open(_ session: TerminalSession, replacing: TerminalSession.ID? = nil) {
-        if let replacing, let index = sessions.firstIndex(where: { $0.id == replacing }) {
-            sessions[index].hangUp()
-            sessions[index] = session
+        if let replacing, let index = tabs.firstIndex(where: { $0.id == replacing }) {
+            tabs[index].session?.hangUp()
+            tabs[index] = .terminal(session)
         } else {
-            sessions.append(session)
+            tabs.append(.terminal(session))
         }
-        activeSessionID = session.id
-        selection = .terminal
+        activeTabID = session.id
+        selection = .tabs
         session.start()
     }
 
     // MARK: 远程文件
 
-    /// 打开服务器的文件浏览页；已经打开过的保留原来的目录。
+    var fileBrowsers: [FileBrowserModel] { tabs.compactMap(\.browser) }
+
+    func fileBrowser(for server: Server) -> FileBrowserModel? {
+        fileBrowsers.first { $0.serverID == server.persistentModelID }
+    }
+
+    /// 打开服务器的文件标签；每台服务器一个，已经打开的切过去，目录和编辑内容都保留。
     func openFiles(_ server: Server) {
         perform {
             let client = try makeFileClient(server.sshTarget())
-            let id = server.persistentModelID
-            if let browser = fileBrowsers[id] {
+            if let browser = fileBrowser(for: server) {
                 browser.client = client
                 browser.isProduction = server.isProduction
+                activeTabID = browser.id
             } else {
                 let browser = FileBrowserModel(
-                    client: client, serverName: server.name, isProduction: server.isProduction,
+                    client: client, serverID: server.persistentModelID, serverName: server.name,
+                    isProduction: server.isProduction,
                     initialDirectory: ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
                 browser.notify = { [weak self] in self?.showToast($0) }
-                fileBrowsers[id] = browser
+                tabs.append(.files(browser))
+                activeTabID = browser.id
             }
-            selection = .files(id)
+            selection = .tabs
         }
     }
 
     /// 有未保存修改的文件，退出前提醒。
     var unsavedFileNames: [String] {
-        fileBrowsers.values.filter(\.isDirty).compactMap { b in
+        fileBrowsers.filter(\.isDirty).compactMap { b in
             b.openedPath.map { "\(b.serverName)：\($0)" }
         }
     }
 
-    // MARK: 终端会话
+    /// 正在上传下载的文件，退出前提醒。
+    var activeTransferNames: [String] {
+        fileBrowsers.compactMap { b in b.transfer.map { "\(b.serverName)：\($0.name)" } }
+    }
 
-    var activeSession: TerminalSession? {
-        sessions.first { $0.id == activeSessionID } ?? sessions.last
+    // MARK: 标签
+
+    var sessions: [TerminalSession] { tabs.compactMap(\.session) }
+
+    var activeTab: WorkspaceTab? {
+        tabs.first { $0.id == activeTabID } ?? tabs.last
+    }
+
+    /// 关闭标签：终端直接结束；文件有未保存的修改或正在传输时先确认。
+    func close(_ tab: WorkspaceTab) {
+        switch tab {
+        case .terminal(let s): close(s)
+        case .files(let b):
+            if b.isDirty || b.transfer != nil { pendingTabClose = b } else { removeTab(b.id) }
+        }
+    }
+
+    /// 确认关闭文件标签：取消传输、放弃未保存的修改。
+    func confirmTabClose() {
+        guard let b = pendingTabClose else { return }
+        pendingTabClose = nil
+        b.cancelTransfer()
+        removeTab(b.id)
+    }
+
+    /// 关闭其他标签；需要确认的文件标签保留。
+    func closeOthers(than tab: WorkspaceTab) {
+        for other in tabs where other.id != tab.id {
+            switch other {
+            case .terminal(let s): close(s)
+            case .files(let b): if !b.isDirty && b.transfer == nil { removeTab(b.id) }
+            }
+        }
+    }
+
+    /// 切换到相邻的标签（⌘⇧[ / ⌘⇧]）。
+    func selectAdjacentTab(_ offset: Int) {
+        guard !tabs.isEmpty, let current = activeTab,
+              let index = tabs.firstIndex(where: { $0.id == current.id }) else { return }
+        activeTabID = tabs[(index + offset + tabs.count) % tabs.count].id
+        selection = .tabs
+    }
+
+    private func removeTab(_ id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs.remove(at: index)
+        if activeTabID == id {
+            activeTabID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
+        }
+        if tabs.isEmpty, selection == .tabs { selection = nil }
     }
 
     var runningSessionCount: Int {
@@ -202,12 +280,7 @@ final class AppModel {
 
     func close(_ session: TerminalSession) {
         session.hangUp()
-        guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
-        sessions.remove(at: index)
-        if activeSessionID == session.id {
-            activeSessionID = sessions.indices.contains(index) ? sessions[index].id : sessions.last?.id
-        }
-        if sessions.isEmpty, selection == .terminal { selection = nil }
+        removeTab(session.id)
     }
 
     /// 关闭所有已结束的标签。
@@ -215,9 +288,10 @@ final class AppModel {
         for s in sessions where !s.state.isRunning { close(s) }
     }
 
-    /// 退出应用前结束所有会话。
+    /// 退出应用前结束所有会话和传输。
     func hangUpAll() {
         sessions.forEach { $0.hangUp() }
+        fileBrowsers.forEach { $0.cancelTransfer() }
     }
 
     // MARK: 删除
@@ -230,8 +304,11 @@ final class AppModel {
             case .group(let g):
                 try library.deleteGroup(g)
             case .server(let s, _):
-                if selection == .server(s.persistentModelID) || selection == .files(s.persistentModelID) { selection = nil }
-                fileBrowsers[s.persistentModelID] = nil
+                if selection == .server(s.persistentModelID) { selection = nil }
+                if let b = fileBrowser(for: s) {
+                    b.cancelTransfer()
+                    removeTab(b.id)
+                }
                 try library.deleteServer(s)
             case .command(let c):
                 try library.deleteCommand(c)

@@ -61,6 +61,10 @@ public enum RemoteFileError: Error, Equatable, LocalizedError {
     case tooLarge(path: String, size: Int64)
     /// 打开之后文件被别人改过。
     case conflict(String)
+    /// 上传时目标已存在且没有允许覆盖。
+    case alreadyExists(String)
+    /// 本地文件读写失败等。
+    case local(String)
     case timeout
     case badOutput
     /// 其他失败：远端（或 ssh）的退出码和 stderr。
@@ -72,8 +76,10 @@ public enum RemoteFileError: Error, Equatable, LocalizedError {
         case .notRegularFile(let p): "不是普通文件：\(p)"
         case .notWritable(let p): "没有写权限：\(p)"
         case .tooLarge(let p, let size):
-            "文件太大（\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))），不能打开：\(p)"
+            "文件太大（\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))），不能打开：\(p)\n超过 5 MB 的文件可以下载到本地查看。"
         case .conflict(let p): "文件在打开后被修改过：\(p)"
+        case .alreadyExists(let p): "文件已存在：\(p)"
+        case .local(let message): message
         case .timeout: "操作超时"
         case .badOutput: "远端返回的内容无法解析"
         case .remote(let status, let message): message.isEmpty ? "执行失败（退出码 \(status)）" : message
@@ -83,7 +89,7 @@ public enum RemoteFileError: Error, Equatable, LocalizedError {
 
 /// 远程文件操作的内层脚本和输出解析。全部是纯函数，脚本经 `ScriptBuilder.remoteCommand(script:)` 发到远端。
 ///
-/// 约定的退出码：20 不是普通文件，21 文件太大（stdout 是大小），22 冲突，23 没有写权限。
+/// 约定的退出码：20 不是普通文件，21 文件太大（stdout 是大小），22 冲突，23 没有写权限，24 文件已存在。
 public enum RemoteFileScript {
     public static let maxReadBytes: Int64 = 5 * 1024 * 1024
 
@@ -91,6 +97,7 @@ public enum RemoteFileScript {
     static let statusTooLarge: Int32 = 21
     static let statusConflict: Int32 = 22
     static let statusNotWritable: Int32 = 23
+    static let statusExists: Int32 = 24
 
     /// 列目录：先输出 `$PWD`，再每个条目一条“类型 链接 可写 大小 修改时间 名称”，记录以 NUL 结尾。
     /// 目录为空时列登录用户的家目录。
@@ -146,6 +153,44 @@ public enum RemoteFileScript {
         [ "$n" = \(byteCount) ] || { echo "内容没有传完整（收到 $n 字节，应为 \(byteCount)），未写入" >&2; exit 1; }
         cat -- "$t" > "$f" || exit 1
         cksum < "$f"
+        """
+    }
+
+    /// 下载：第一行输出文件大小，接着用 `head -c` 正好输出这么多字节（文件在下载中变长也不影响核对）。
+    public static func download(path: String) -> String {
+        """
+        f=\(ScriptBuilder.shq(path))
+        [ -e "$f" ] || { echo "文件不存在：$f" >&2; exit 1; }
+        [ -f "$f" ] || { echo "不是普通文件：$f" >&2; exit \(statusNotRegular); }
+        [ -r "$f" ] || { echo "没有读权限：$f" >&2; exit 1; }
+        s=$(wc -c < "$f") || exit 1
+        s=${s//[!0-9]/}
+        printf '%s\\n' "$s"
+        [ "$s" = 0 ] && exit 0
+        exec head -c "$s" -- "$f"
+        """
+    }
+
+    /// 上传：内容从 stdin 收到临时文件（目标目录可写就放在目标目录，否则放 /tmp），核对字节数后 `cat` 写到目标。
+    /// 目标已存在时覆盖不改变权限和属主；新文件按远端 umask 创建。
+    public static func upload(path: String, byteCount: Int64, overwrite: Bool) -> String {
+        """
+        f=\(ScriptBuilder.shq(path))
+        d=$(dirname -- "$f")
+        [ -d "$d" ] || { echo "目录不存在：$d" >&2; exit 1; }
+        if [ -e "$f" ] || [ -L "$f" ]; then
+          \(overwrite ? ":" : "echo \"文件已存在：$f\" >&2; exit \(statusExists)")
+          [ -f "$f" ] || { echo "不是普通文件：$f" >&2; exit \(statusNotRegular); }
+          [ -w "$f" ] || { echo "没有写权限：$f" >&2; exit \(statusNotWritable); }
+        else
+          [ -w "$d" ] || { echo "没有写权限：$d" >&2; exit \(statusNotWritable); }
+        fi
+        if [ -w "$d" ]; then t=$(mktemp "$d/.cmdcode-upload.XXXXXX"); else t=$(mktemp "${TMPDIR:-/tmp}/cmdcode.XXXXXX"); fi || exit 1
+        trap 'rm -f "$t"' EXIT
+        cat > "$t" || exit 1
+        n=$(wc -c < "$t"); n=${n//[!0-9]/}
+        [ "$n" = \(byteCount) ] || { echo "内容没有传完整（收到 $n 字节，应为 \(byteCount)），未写入" >&2; exit 1; }
+        cat -- "$t" > "$f" || exit 1
         """
     }
 
@@ -218,13 +263,13 @@ public struct RemoteFileClient: Sendable {
     }
 
     public func list(directory: String?) async throws -> RemoteDirectoryListing {
-        let r = try await run(RemoteFileScript.list(directory: directory))
+        let r = try await run(RemoteFileScript.list(directory: directory), options: ProcessOptions(timeout: timeout))
         try check(r, path: directory ?? "~")
         return try RemoteFileScript.parseListing(r.stdout)
     }
 
     public func read(path: String) async throws -> RemoteFileContent {
-        let r = try await run(RemoteFileScript.read(path: path))
+        let r = try await run(RemoteFileScript.read(path: path), options: ProcessOptions(timeout: timeout))
         if r.status == RemoteFileScript.statusTooLarge {
             throw RemoteFileError.tooLarge(path: path, size: Int64(String(decoding: r.stdout, as: UTF8.self)) ?? 0)
         }
@@ -235,9 +280,51 @@ public struct RemoteFileClient: Sendable {
     /// 写回文件，返回新的校验值。`expectedChecksum` 为 nil 表示不检查冲突，直接覆盖。
     public func write(_ data: Data, to path: String, expectedChecksum: String?) async throws -> String {
         let script = RemoteFileScript.write(path: path, byteCount: data.count, expectedChecksum: expectedChecksum)
-        let r = try await run(script, input: data)
+        let r = try await run(script, options: ProcessOptions(input: .data(data), timeout: timeout))
         try check(r, path: path)
         return String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: 上传下载
+
+    /// 下载远程文件到本地。先写到同目录的临时文件，传完并核对字节数后再替换目标文件，中途失败不留半截文件。
+    /// `progress` 大约每 0.2 秒回调一次（已传字节数，总字节数），在后台线程。
+    public func download(path: String, to destination: URL,
+                         progress: @escaping @Sendable (Int64, Int64) -> Void = { _, _ in }) async throws {
+        let fm = FileManager.default
+        let temp = destination.deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).cmdcode-\(UUID().uuidString.prefix(8))")
+        guard fm.createFile(atPath: temp.path, contents: nil) else {
+            throw RemoteFileError.local("无法写入：\(destination.deletingLastPathComponent().path)")
+        }
+        defer { try? fm.removeItem(at: temp) }
+        let handle = try FileHandle(forWritingTo: temp)
+        let sink = DownloadSink(handle: handle)
+        var options = ProcessOptions()
+        options.stdoutSink = { try sink.receive($0) }
+        options.counter = sink.counter
+        options.progress = progress
+        let r = try await run(RemoteFileScript.download(path: path), options: options)
+        try handle.close()
+        try check(r, path: path)
+        guard let total = sink.total, sink.counter.bytes == total else {
+            throw RemoteFileError.local("下载不完整（收到 \(sink.counter.bytes) 字节），已放弃")
+        }
+        if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+        try fm.moveItem(at: temp, to: destination)
+    }
+
+    /// 上传本地文件到远程路径。目标已存在时：`overwrite` 为 false 报 `.alreadyExists`，为 true 用 `cat` 覆盖（权限、属主不变）。
+    public func upload(from source: URL, to path: String, overwrite: Bool,
+                       progress: @escaping @Sendable (Int64, Int64) -> Void = { _, _ in }) async throws {
+        let size = try (FileManager.default.attributesOfItem(atPath: source.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let counter = TransferCounter(total: size)
+        var options = ProcessOptions()
+        options.input = .file(source)
+        options.counter = counter
+        options.progress = progress
+        let r = try await run(RemoteFileScript.upload(path: path, byteCount: size, overwrite: overwrite), options: options)
+        try check(r, path: path)
     }
 
     private func check(_ r: ProcessResult, path: String) throws {
@@ -246,6 +333,7 @@ public struct RemoteFileClient: Sendable {
         case RemoteFileScript.statusNotRegular: throw RemoteFileError.notRegularFile(path)
         case RemoteFileScript.statusNotWritable: throw RemoteFileError.notWritable(path)
         case RemoteFileScript.statusConflict: throw RemoteFileError.conflict(path)
+        case RemoteFileScript.statusExists: throw RemoteFileError.alreadyExists(path)
         default:
             var message = String(decoding: r.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             // sshpass 密码错误时不输出任何内容，只有退出码 5。
@@ -254,22 +342,121 @@ public struct RemoteFileClient: Sendable {
         }
     }
 
-    private func run(_ script: String, input: Data? = nil) async throws -> ProcessResult {
+    private func run(_ script: String, options: ProcessOptions = ProcessOptions()) async throws -> ProcessResult {
         let invocation = ScriptBuilder.sshInvocation(
             target: target, sshpassPath: sshpassPath,
             remoteCommand: ScriptBuilder.remoteCommand(script: script), allocateTTY: false)
         var env = invocation.environment
         // sshpass 通过 PATH 找 ssh。
         env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
-        let (environment, timeout) = (env, timeout)
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                continuation.resume(with: Result {
-                    try ProcessResult.run(invocation.executable, invocation.arguments,
-                                          environment: environment, input: input, timeout: timeout)
-                })
+        let canceller = ProcessCanceller()
+        var options = options
+        options.canceller = canceller
+        let environment = env
+        let finalOptions = options
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global().async {
+                    continuation.resume(with: Result {
+                        try ProcessResult.run(invocation.executable, invocation.arguments,
+                                              environment: environment, options: finalOptions)
+                    })
+                }
             }
+        } onCancel: {
+            canceller.cancel()
         }
+    }
+}
+
+// MARK: - 进程
+
+/// 进程的标准输入来源。
+enum ProcessInput: Sendable {
+    case data(Data)
+    /// 按块读本地文件送进去，不整个读进内存。
+    case file(URL)
+}
+
+struct ProcessOptions: Sendable {
+    var input: ProcessInput?
+    /// 设置后 stdout 交给它处理（下载写文件），不收在内存里。抛错会结束进程。
+    var stdoutSink: (@Sendable (Data) throws -> Void)?
+    /// nil 表示不限时（上传下载）。
+    var timeout: TimeInterval?
+    /// 传输字节计数：上传时由写 stdin 的线程累加，下载时由 `stdoutSink` 累加。
+    var counter: TransferCounter?
+    var progress: (@Sendable (Int64, Int64) -> Void)?
+    var canceller: ProcessCanceller?
+}
+
+final class TransferCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _bytes: Int64 = 0
+    private var _total: Int64
+
+    init(total: Int64 = 0) { _total = total }
+
+    var bytes: Int64 { lock.withLock { _bytes } }
+    var total: Int64 {
+        get { lock.withLock { _total } }
+        set { lock.withLock { _total = newValue } }
+    }
+
+    func add(_ n: Int) { lock.withLock { _bytes += Int64(n) } }
+}
+
+/// 取消时结束进程。进程还没启动就取消的，启动后立即结束。
+final class ProcessCanceller: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    var isCancelled: Bool { lock.withLock { cancelled } }
+
+    func attach(_ p: Process) {
+        let cancelNow = lock.withLock { () -> Bool in
+            process = p
+            return cancelled
+        }
+        if cancelNow { p.terminate() }
+    }
+
+    func cancel() {
+        let p = lock.withLock { () -> Process? in
+            cancelled = true
+            return process
+        }
+        p?.terminate()
+    }
+}
+
+/// 下载的 stdout：第一行是文件大小，之后是文件内容，直接写进本地文件。
+private final class DownloadSink: @unchecked Sendable {
+    let handle: FileHandle
+    let counter = TransferCounter()
+    private var header = Data()
+    private(set) var total: Int64?
+
+    init(handle: FileHandle) { self.handle = handle }
+
+    /// 只在 stdout 的读取回调里串行调用。
+    func receive(_ chunk: Data) throws {
+        var body = chunk
+        if total == nil {
+            header.append(chunk)
+            guard let newline = header.firstIndex(of: UInt8(ascii: "\n")) else { return }
+            guard let size = Int64(String(decoding: header[..<newline], as: UTF8.self)) else {
+                throw RemoteFileError.badOutput
+            }
+            total = size
+            counter.total = size
+            body = Data(header[header.index(after: newline)...])
+            header = Data()
+        }
+        guard !body.isEmpty else { return }
+        try handle.write(contentsOf: body)
+        counter.add(body.count)
     }
 }
 
@@ -278,9 +465,9 @@ struct ProcessResult: Sendable {
     var stderr: Data
     var status: Int32
 
-    /// 同步运行一个进程，输出收在内存里。会阻塞当前线程，别在主线程调用。
+    /// 同步运行一个进程。会阻塞当前线程，别在主线程调用。
     static func run(_ executable: String, _ arguments: [String], environment: [String: String],
-                    input: Data?, timeout: TimeInterval) throws -> ProcessResult {
+                    options: ProcessOptions) throws -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -288,18 +475,25 @@ struct ProcessResult: Sendable {
         let outPipe = Pipe(), errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
-        let inPipe = input.map { _ in Pipe() }
+        let inPipe = options.input.map { _ in Pipe() }
         process.standardInput = inPipe ?? FileHandle.nullDevice
+        // 远端提前退出（冲突、文件已存在）时管道读端已关，再写会收到 SIGPIPE 让整个应用退出；改成写入报错。
+        if let inPipe { _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) }
 
         let buffers = OutputBuffers()
         let eof = DispatchGroup()
         for (pipe, isOut) in [(outPipe, true), (errPipe, false)] {
             eof.enter()
-            pipe.fileHandleForReading.readabilityHandler = { handle in
+            pipe.fileHandleForReading.readabilityHandler = { [weak process] handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
                     handle.readabilityHandler = nil
                     eof.leave()
+                } else if isOut, let sink = options.stdoutSink {
+                    do { try sink(chunk) } catch {
+                        buffers.fail(error)
+                        process?.terminate()
+                    }
                 } else {
                     buffers.append(chunk, toOut: isOut)
                 }
@@ -307,27 +501,63 @@ struct ProcessResult: Sendable {
         }
 
         try process.run()
-        if let inPipe, let input {
+        options.canceller?.attach(process)
+        if let inPipe, let input = options.input {
             DispatchQueue.global().async {
-                try? inPipe.fileHandleForWriting.write(contentsOf: input)
-                try? inPipe.fileHandleForWriting.close()
+                writeInput(input, to: inPipe.fileHandleForWriting, counter: options.counter)
             }
         }
-        let timer = DispatchWorkItem { [weak process] in
-            buffers.markTimedOut()
-            process?.terminate()
+        let timer = options.timeout.map { timeout in
+            let item = DispatchWorkItem { [weak process] in
+                buffers.markTimedOut()
+                process?.terminate()
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: item)
+            return item
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
+        let ticker = options.progress.map { progress in
+            let t = DispatchSource.makeTimerSource(queue: .global())
+            t.schedule(deadline: .now() + 0.2, repeating: 0.2)
+            t.setEventHandler { if let c = options.counter { progress(c.bytes, c.total) } }
+            t.resume()
+            return t
+        }
         process.waitUntilExit()
-        timer.cancel()
+        timer?.cancel()
+        ticker?.cancel()
         // 数据在进程退出前已写完；管道写端偶尔会被同时启动的其他子进程继承而迟迟等不到 EOF，最多再等 1 秒。
         _ = eof.wait(timeout: .now() + 1)
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
+        if let c = options.counter { options.progress?(c.bytes, c.total) }
 
-        let (out, err, timedOut) = buffers.snapshot()
+        if options.canceller?.isCancelled == true { throw CancellationError() }
+        let (out, err, timedOut, failure) = buffers.snapshot()
+        if let failure { throw failure }
         if timedOut { throw RemoteFileError.timeout }
         return ProcessResult(stdout: out, stderr: err, status: process.terminationStatus)
+    }
+
+    private static func writeInput(_ input: ProcessInput, to handle: FileHandle, counter: TransferCounter?) {
+        defer { try? handle.close() }
+        let chunkSize = 256 * 1024
+        switch input {
+        case .data(let data):
+            var offset = 0
+            while offset < data.count {
+                let end = min(offset + chunkSize, data.count)
+                guard (try? handle.write(contentsOf: data[offset..<end])) != nil else { return }
+                counter?.add(end - offset)
+                offset = end
+            }
+        case .file(let url):
+            guard let reader = try? FileHandle(forReadingFrom: url) else { return }
+            defer { try? reader.close() }
+            while let chunk = try? reader.read(upToCount: chunkSize), !chunk.isEmpty {
+                guard (try? handle.write(contentsOf: chunk)) != nil else { return }
+                counter?.add(chunk.count)
+            }
+        }
     }
 }
 
@@ -336,6 +566,7 @@ private final class OutputBuffers: @unchecked Sendable {
     private var out = Data()
     private var err = Data()
     private var timedOut = false
+    private var failure: Error?
 
     func append(_ chunk: Data, toOut: Bool) {
         lock.withLock { if toOut { out.append(chunk) } else { err.append(chunk) } }
@@ -343,5 +574,7 @@ private final class OutputBuffers: @unchecked Sendable {
 
     func markTimedOut() { lock.withLock { timedOut = true } }
 
-    func snapshot() -> (Data, Data, Bool) { lock.withLock { (out, err, timedOut) } }
+    func fail(_ error: Error) { lock.withLock { if failure == nil { failure = error } } }
+
+    func snapshot() -> (Data, Data, Bool, Error?) { lock.withLock { (out, err, timedOut, failure) } }
 }

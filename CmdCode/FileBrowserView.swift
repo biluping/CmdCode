@@ -2,30 +2,22 @@ import AppKit
 import CmdCodeCore
 import SwiftUI
 
-/// 服务器的远程文件页：上面路径栏，左边目录列表，右边查看和编辑文件内容。
+/// 文件标签的内容（标签栏由 `TerminalPane` 提供）：上面路径栏，左边目录列表，右边查看和编辑文件内容。
 struct FileBrowserView: View {
-    @Environment(AppModel.self) private var model
     let server: Server
     @Bindable var browser: FileBrowserModel
 
     var body: some View {
         VStack(spacing: 0) {
-            ContentHeader(title: [server.name, "文件"].joined(separator: " / ")) {
-                Button { model.showServer(server) } label: {
-                    Label("服务器详情", systemImage: "server.rack")
-                }
-                .buttonStyle(PillButtonStyle())
-                Button { model.login(server) } label: {
-                    Label("登录服务器", systemImage: "terminal")
-                }
-                .buttonStyle(PillButtonStyle())
-            }
             pathBar
             HSplitView {
                 DirectoryList(browser: browser)
-                    .frame(minWidth: 220, idealWidth: 300, maxWidth: 480)
+                    .frame(minWidth: 200, idealWidth: 260, maxWidth: 400)
                 FilePreview(browser: browser)
-                    .frame(minWidth: 320, maxWidth: .infinity)
+                    .frame(minWidth: 420, maxWidth: .infinity)
+            }
+            if let transfer = browser.transfer {
+                TransferBar(transfer: transfer) { browser.cancelTransfer() }
             }
         }
         .onAppear { browser.start() }
@@ -48,11 +40,31 @@ struct FileBrowserView: View {
         } message: {
             Text("\(server.name)：\(browser.openedPath ?? "")")
         }
+        .alert(uploadTitle, isPresented: isPresent($browser.pendingUpload), presenting: browser.pendingUpload) { pending in
+            Button(pending.exists ? "覆盖" : "上传", role: .destructive) { browser.upload(pending) }
+            Button("取消", role: .cancel) {}
+        } message: { pending in
+            Text(pending.exists
+                 ? "\(server.name) 上已有 \(pending.target)，覆盖后原内容无法恢复（权限和属主保持不变）。"
+                 : "\(server.name)：\(pending.target)")
+        }
+        .alert(browser.transferError?.title ?? "", isPresented: isPresent($browser.transferError)) {
+            Button("好") {}
+        } message: {
+            Text(browser.transferError?.message ?? "")
+        }
         .alert("保存失败", isPresented: isPresent($browser.saveError)) {
             Button("好") {}
         } message: {
             Text(browser.saveError ?? "")
         }
+    }
+
+    private var uploadTitle: String {
+        guard let pending = browser.pendingUpload else { return "" }
+        let name = (pending.target as NSString).lastPathComponent
+        if pending.exists { return browser.isProduction ? "覆盖生产环境服务器上的“\(name)”？" : "覆盖“\(name)”？" }
+        return "上传到生产环境服务器？"
     }
 
     private var pathBar: some View {
@@ -82,6 +94,12 @@ struct FileBrowserView: View {
                 }
             }
             .frame(width: 26)
+            Button {
+                if let url = FilePanels.chooseUploadSource() { browser.requestUpload(url) }
+            } label: { Label("上传", systemImage: "arrow.up.doc") }
+                .buttonStyle(PillButtonStyle())
+                .disabled(browser.listing == nil || browser.transfer != nil)
+                .help("上传本地文件到当前目录")
         }
         .padding(.horizontal, 12)
         .frame(height: 42)
@@ -93,6 +111,22 @@ struct FileBrowserView: View {
 
 private struct DirectoryList: View {
     let browser: FileBrowserModel
+
+    @ViewBuilder private func menu(for entry: RemoteFileEntry, in directory: String) -> some View {
+        let path = RemoteFileScript.join(directory, entry.name)
+        if entry.kind == .file {
+            Button("打开") { browser.open(entry) }
+            Button("下载…") {
+                if let url = FilePanels.chooseDownloadDestination(name: entry.name) { browser.download(path, to: url) }
+            }
+            .disabled(browser.transfer != nil)
+            Divider()
+        }
+        Button("复制路径") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(path, forType: .string)
+        }
+    }
 
     var body: some View {
         Group {
@@ -122,6 +156,7 @@ private struct DirectoryList: View {
                                          selected: browser.openedPath == RemoteFileScript.join(listing.path, entry.name)) {
                                     browser.open(entry)
                                 }
+                                .contextMenu { menu(for: entry, in: listing.path) }
                             }
                         }
                         .padding(6)
@@ -230,15 +265,24 @@ private struct FilePreview: View {
                 .lineLimit(1)
                 .truncationMode(.head)
                 .textSelection(.enabled)
+                .layoutPriority(-1)
             if let c = browser.content {
-                if !c.isWritable { Chip(text: "只读", systemImage: "lock.fill") }
-                if browser.isDirty { Chip(text: "未保存", tint: .orange) }
+                if !c.isWritable { Chip(text: "只读", systemImage: "lock.fill").fixedSize() }
+                if browser.isDirty { Chip(text: "未保存", tint: .orange).fixedSize() }
                 Text(ByteCountFormatter.string(fromByteCount: Int64(c.data.count), countStyle: .file))
                     .font(Theme.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             if browser.isReading || browser.isSaving { ProgressView().controlSize(.small) }
+            Button {
+                if let url = FilePanels.chooseDownloadDestination(name: (path as NSString).lastPathComponent) {
+                    browser.download(path, to: url)
+                }
+            } label: { Image(systemName: "arrow.down.circle") }
+                .buttonStyle(IconButtonStyle())
+                .help("下载到本地")
+                .disabled(browser.transfer != nil)
             if browser.content != nil || browser.readError != nil {
                 Button { browser.requestReload() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(IconButtonStyle())
@@ -248,11 +292,13 @@ private struct FilePreview: View {
             if browser.isEditable {
                 Button("还原") { browser.revert() }
                     .buttonStyle(PillButtonStyle())
+                    .fixedSize()
                     .disabled(!browser.isDirty || browser.isSaving)
                     .help("撤销所有修改")
                 Button { browser.requestSave() } label: { Label("保存", systemImage: "square.and.arrow.down") }
                     .buttonStyle(PrimaryButtonStyle(tint: browser.isProduction ? Theme.danger : .accentColor))
                     .keyboardShortcut("s")
+                    .fixedSize()
                     .disabled(!browser.isDirty || browser.isSaving)
                     .help(browser.isProduction ? "保存到生产环境服务器（会先确认）" : "保存到服务器（⌘S）")
             }
@@ -288,6 +334,64 @@ private struct FilePreview: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - 上传下载
+
+private struct TransferBar: View {
+    let transfer: FileBrowserModel.Transfer
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: transfer.kind == .upload ? "arrow.up.circle" : "arrow.down.circle")
+                .foregroundStyle(Color.accentColor)
+            Text("\(transfer.kind == .upload ? "正在上传" : "正在下载") \(transfer.name)")
+                .font(Theme.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            ProgressView(value: transfer.total > 0 ? min(Double(transfer.done) / Double(transfer.total), 1) : 0)
+                .progressViewStyle(.linear)
+                .frame(maxWidth: 260)
+            Text("\(bytes(transfer.done)) / \(bytes(transfer.total))")
+                .font(Theme.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer()
+            Button("取消", action: onCancel)
+                .buttonStyle(PillButtonStyle())
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
+    }
+
+    private func bytes(_ n: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+    }
+}
+
+/// 选择本地文件的系统面板。
+@MainActor
+enum FilePanels {
+    static func chooseDownloadDestination(name: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "下载到"
+        panel.nameFieldStringValue = name
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.canCreateDirectories = true
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    static func chooseUploadSource() -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = "选择要上传的文件"
+        panel.prompt = "上传"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        return panel.runModal() == .OK ? panel.url : nil
     }
 }
 

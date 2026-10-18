@@ -10,17 +10,11 @@ struct DetailView: View {
         switch model.selection {
         case .credentials:
             CredentialsView()
-        case .terminal:
+        case .tabs:
             TerminalPane()
         case .server(let id):
             if let server = context.model(for: id) as? Server, !server.isDeleted {
                 ServerDetailView(server: server)
-            } else {
-                WelcomeView()
-            }
-        case .files(let id):
-            if let server = context.model(for: id) as? Server, !server.isDeleted, let browser = model.fileBrowsers[id] {
-                FileBrowserView(server: server, browser: browser)
             } else {
                 WelcomeView()
             }

@@ -84,34 +84,44 @@ enum Snapshot {
             ("14-files", {
                 model.renamingGroup = nil
                 model.openFiles(seed.lims232)
-                let browser = model.fileBrowsers[seed.lims232.persistentModelID]
+                let browser = model.fileBrowser(for: seed.lims232)
                 browser?.go(to: filesDir)
                 browser?.read(filesDir + "/application.yml")
             }),
             ("15-files-error", {
-                model.fileBrowsers[seed.lims232.persistentModelID]?.go(to: "/usr/local/app/不存在")
+                model.fileBrowser(for: seed.lims232)?.go(to: "/usr/local/app/不存在")
             }),
             ("16-files-reopen", {
-                let browser = model.fileBrowsers[seed.lims232.persistentModelID]
+                let browser = model.fileBrowser(for: seed.lims232)
                 browser?.go(to: filesDir)
                 browser?.read(filesDir + "/application.yml")
             }),
             ("16-files-dirty", {
-                model.fileBrowsers[seed.lims232.persistentModelID]?.draft
-                    .replace("root: INFO", with: "root: WARN")
+                let browser = model.fileBrowser(for: seed.lims232)
+                browser?.draft.replace("root: INFO", with: "root: WARN")
+                browser?.transfer = .init(kind: .upload, name: "lims-web-2.3.1.jar", done: 9_400_000, total: 24_800_000)
             }),
             ("17-files-conflict", {
                 // 模拟别人在打开之后改了文件
                 try? "changed by someone\n".write(toFile: filesDir + "/application.yml", atomically: false, encoding: .utf8)
-                model.fileBrowsers[seed.lims232.persistentModelID]?.requestSave()
+                model.fileBrowser(for: seed.lims232)?.requestSave()
             }),
-            ("18-files-saved", {
-                model.fileBrowsers[seed.lims232.persistentModelID]?.conflictPending = false
+            ("18-files-upload-overwrite", {
+                let browser = model.fileBrowser(for: seed.lims232)
+                browser?.conflictPending = false
+                browser?.transfer = nil
+                browser?.pendingUpload = .init(source: URL(fileURLWithPath: "/tmp/application.yml"),
+                                               target: filesDir + "/application.yml", exists: true)
+            }),
+            ("19-files-closed", {
+                let browser = model.fileBrowser(for: seed.lims232)
+                browser?.pendingUpload = nil
+                browser?.requestClose()
+                browser?.confirmDiscard()
             }),
             ("09-toast", { model.showToast("已复制密码，60 秒后自动清除") }),
             ("10-terminal", {
                 model.renamingGroup = nil
-                model.fileBrowsers.removeAll()
                 if model.sessions.isEmpty {
                     model.open(demoSession("看日志", server: "135 - lims", production: true,
                                            script: "for i in 1 2 3; do echo \"$(date +%T) INFO  request handled in ${i}2ms\"; done; sleep 600"))
@@ -119,7 +129,15 @@ enum Snapshot {
                                            script: "echo 'Job for lims.service failed.'; exit 3"))
                     model.open(demoSession("构建", server: "232 - lims 主服务", production: false, script: buildLog))
                 }
-                model.selection = .terminal
+                model.selection = .tabs
+            }),
+            ("20-tabs-files", {
+                model.openFiles(seed.lims232)
+                let browser = model.fileBrowser(for: seed.lims232)
+                browser?.read(filesDir + "/build.sh")
+            }),
+            ("21-tabs-files-dirty", {
+                model.fileBrowser(for: seed.lims232)?.draft += "echo deployed\n"
             }),
         ]
 
@@ -143,11 +161,11 @@ enum Snapshot {
             model.toast = nil
             // 下一轮外观重新创建终端会话
             model.hangUpAll()
-            model.sessions.removeAll()
+            model.tabs.removeAll()
             try? await Task.sleep(for: .milliseconds(500))
         }
         model.hangUpAll()
-        model.sessions.removeAll()
+        model.tabs.removeAll()
         NSApp.terminate(nil)
     }
 

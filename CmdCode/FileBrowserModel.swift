@@ -1,11 +1,14 @@
 import CmdCodeCore
 import Foundation
 import Observation
+import SwiftData
 
-/// 一台服务器的远程文件浏览状态：当前目录、正在查看的文件。切换到别的页面再回来时保留。
+/// 一台服务器的远程文件标签：当前目录、正在查看的文件、上传下载。切换到别的标签再回来时保留。
 @MainActor
 @Observable
-final class FileBrowserModel {
+final class FileBrowserModel: Identifiable {
+    let id = UUID()
+    let serverID: PersistentIdentifier
     /// 每次进入文件页时按服务器当前的凭据重新生成，改了密码也能用。
     var client: RemoteFileClient
     let serverName: String
@@ -38,6 +41,26 @@ final class FileBrowserModel {
     /// 保存成功等提示（由 AppModel 接到底部提示条）。
     @ObservationIgnored var notify: (String) -> Void = { _ in }
 
+    /// 正在进行的上传或下载，同一时间只有一个。
+    var transfer: Transfer?
+    /// 上传前要用户确认（覆盖已有文件、生产环境）。
+    var pendingUpload: PendingUpload?
+    var transferError: (title: String, message: String)?
+
+    struct Transfer {
+        enum Kind { case upload, download }
+        var kind: Kind
+        var name: String
+        var done: Int64 = 0
+        var total: Int64
+    }
+
+    struct PendingUpload {
+        var source: URL
+        var target: String
+        var exists: Bool
+    }
+
     enum DiscardAction {
         case open(String)
         case reload
@@ -46,9 +69,12 @@ final class FileBrowserModel {
 
     @ObservationIgnored private var listTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
+    @ObservationIgnored private var transferTask: Task<Void, Never>?
 
-    init(client: RemoteFileClient, serverName: String, isProduction: Bool, initialDirectory: String?) {
+    init(client: RemoteFileClient, serverID: PersistentIdentifier, serverName: String, isProduction: Bool,
+         initialDirectory: String?) {
         self.client = client
+        self.serverID = serverID
         self.serverName = serverName
         self.isProduction = isProduction
         self.initialDirectory = initialDirectory
@@ -205,6 +231,72 @@ final class FileBrowserModel {
     func reloadAfterConflict() {
         conflictPending = false
         if let openedPath { read(openedPath) }
+    }
+
+    // MARK: 上传下载
+
+    func download(_ path: String, to destination: URL) {
+        guard transfer == nil else { return }
+        let name = (path as NSString).lastPathComponent
+        transfer = Transfer(kind: .download, name: name, total: 0)
+        let client = client
+        transferTask = Task {
+            do {
+                try await client.download(path: path, to: destination, progress: progressHandler())
+                notify("已下载到 \(destination.path)")
+            } catch is CancellationError {
+            } catch {
+                transferError = ("下载失败", Self.message(error))
+            }
+            transfer = nil
+        }
+    }
+
+    /// 选好本地文件后：传到当前目录下的同名文件。已存在或生产环境时先确认。
+    func requestUpload(_ source: URL) {
+        guard transfer == nil, let listing else { return }
+        let name = source.lastPathComponent
+        let pending = PendingUpload(source: source, target: RemoteFileScript.join(listing.path, name),
+                                    exists: listing.entries.contains { $0.name == name })
+        if pending.exists || isProduction { pendingUpload = pending } else { upload(pending) }
+    }
+
+    func upload(_ pending: PendingUpload) {
+        pendingUpload = nil
+        guard transfer == nil else { return }
+        let size = (try? FileManager.default.attributesOfItem(atPath: pending.source.path)[.size] as? NSNumber)?.int64Value ?? 0
+        transfer = Transfer(kind: .upload, name: pending.source.lastPathComponent, total: size)
+        let client = client
+        transferTask = Task {
+            do {
+                try await client.upload(from: pending.source, to: pending.target, overwrite: pending.exists,
+                                        progress: progressHandler())
+                notify("已上传 \(pending.source.lastPathComponent)")
+            } catch is CancellationError {
+            } catch RemoteFileError.alreadyExists {
+                // 列表过时：其实已经有同名文件了，改为询问是否覆盖。
+                pendingUpload = PendingUpload(source: pending.source, target: pending.target, exists: true)
+            } catch {
+                transferError = ("上传失败", Self.message(error))
+            }
+            transfer = nil
+            if let dir = listing?.path { go(to: dir) }
+            // 覆盖了正在查看的文件：没改过就重新读。
+            if pending.target == openedPath, !isDirty { read(pending.target) }
+        }
+    }
+
+    func cancelTransfer() {
+        transferTask?.cancel()
+    }
+
+    private func progressHandler() -> @Sendable (Int64, Int64) -> Void {
+        { [weak self] done, total in
+            Task { @MainActor in
+                self?.transfer?.done = done
+                if total > 0 { self?.transfer?.total = total }
+            }
+        }
     }
 
     func read(_ path: String) {

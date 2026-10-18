@@ -36,7 +36,7 @@ struct SidebarView: View {
                     model.selection = .credentials
                 }
 
-                SidebarItem(icon: "terminal", title: "终端", selected: model.selection == .terminal) {
+                SidebarItem(icon: "rectangle.stack", title: "标签页", selected: model.selection == .tabs) {
                     if model.runningSessionCount > 0 {
                         HStack(spacing: 5) {
                             Circle().fill(Theme.success).frame(width: 6, height: 6)
@@ -45,11 +45,11 @@ struct SidebarView: View {
                         .font(Theme.small)
                         .foregroundStyle(.secondary)
                         .help("\(model.runningSessionCount) 个命令正在运行")
-                    } else if !model.sessions.isEmpty {
-                        Text("\(model.sessions.count)").font(Theme.small).foregroundStyle(Theme.faint)
+                    } else if !model.tabs.isEmpty {
+                        Text("\(model.tabs.count)").font(Theme.small).foregroundStyle(Theme.faint)
                     }
                 } action: {
-                    model.selection = .terminal
+                    model.selection = .tabs
                 }
             }
             .padding(.horizontal, 10)
@@ -436,7 +436,7 @@ private struct ServerRows: View {
 
     private var id: PersistentIdentifier { server.persistentModelID }
     private var isExpanded: Bool { model.expandedServers.contains(id) }
-    private var isSelected: Bool { model.selection == .server(id) || model.selection == .files(id) }
+    private var isSelected: Bool { model.selection == .server(id) }
 
     var body: some View {
         TreeRow(depth: 1, isExpanded: isExpanded, icon: "server.rack",

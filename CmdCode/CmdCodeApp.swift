@@ -59,6 +59,13 @@ struct CmdCodeApp: App {
                 Button("搜索") { model.isSearching = true }
                     .keyboardShortcut("k")
             }
+            CommandGroup(before: .windowArrangement) {
+                Button("上一个标签") { model.selectAdjacentTab(-1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                Button("下一个标签") { model.selectAdjacentTab(1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                Divider()
+            }
         }
     }
 }
@@ -77,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return .terminateNow }
         let running = model.runningSessionCount
         let unsaved = model.unsavedFileNames
-        guard running > 0 || !unsaved.isEmpty else { return .terminateNow }
+        let transfers = model.activeTransferNames
+        guard running > 0 || !unsaved.isEmpty || !transfers.isEmpty else { return .terminateNow }
         let alert = NSAlert()
         var details: [String] = []
         if running > 0 {
@@ -87,6 +95,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !unsaved.isEmpty {
             if running == 0 { alert.messageText = "还有 \(unsaved.count) 个文件没有保存" }
             details.append("以下文件的修改会丢失：\n" + unsaved.joined(separator: "\n"))
+        }
+        if !transfers.isEmpty {
+            if running == 0 && unsaved.isEmpty { alert.messageText = "还有 \(transfers.count) 个文件正在传输" }
+            details.append("以下传输会被取消：\n" + transfers.joined(separator: "\n"))
         }
         alert.informativeText = details.joined(separator: "\n\n")
         alert.addButton(withTitle: "退出")
