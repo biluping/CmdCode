@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-CmdCode 是一个 macOS 14+ 的 SwiftUI 原生应用：管理服务器和凭据，给每台服务器配置固定命令，点击后在应用内嵌终端（SwiftTerm）里通过 `sshpass -e ssh` 执行。完整需求与设计决定见 `需求文档.md`，改行为前先对照它（改了行为要同步更新文档）。界面文案、注释、提交信息都用中文。
+CmdCode 是一个 macOS 14+ 的 SwiftUI 原生应用：管理服务器和凭据，给每台服务器配置固定命令，点击后在应用内嵌终端（SwiftTerm）里通过 `sshpass -e ssh` 执行；还能浏览、编辑、上传下载服务器上的文件（同样走 `sshpass -e ssh`，不用 SFTP）。完整需求与设计决定见 `需求文档.md`，改行为前先对照它（改了行为要同步更新文档）。界面文案、注释、提交信息都用中文。
 
 ## 常用命令
 
@@ -24,6 +24,8 @@ build/DerivedData/Build/Products/Debug/CmdCode.app/Contents/MacOS/CmdCode -snaps
 
 # 开发工具（在 CmdCodeCore 下）
 swift run cmdcode-try --host <主机> --user <用户> [--dir <目录>] (--cmd <命令> | --test)   # 不经界面直接试一次 ssh 执行
+swift run cmdcode-try --host <主机> --user <用户> [--port 22] (--ls <目录> | --cat <文件> | --put <文件>)              # 试远程文件读写（--put 读标准输入）
+swift run cmdcode-try --host <主机> --user <用户> [--port 22] (--download <远程> | --upload <本地>) --to <路径> [--force]  # 试上传下载
 swift run cmdcode-import --dry-run                                                       # 从 FinalShell 导入服务器（正式导入前先退出 CmdCode）
 ```
 
@@ -47,7 +49,7 @@ swift run cmdcode-import --dry-run                                              
 ### CmdCode（App）
 
 - `CmdCodeApp.swift`：启动时建 `ModelContainer` 和 `Library`，`-snapshot` 参数时改用内存库并跑 `Snapshot`。
-- `AppModel.swift`：`@Observable` 的界面状态与动作中心——左侧栏选择（`SidebarSelection`）、弹出表单（`SheetRoute`）、执行确认、终端会话列表。数据改动一律调用 `Library`，执行一律调用 `CommandRunner`。
+- `AppModel.swift`：`@Observable` 的界面状态与动作中心——左侧栏选择（`SidebarSelection`）、弹出表单（`SheetRoute`）、执行确认、右侧标签页（`tabs`）。数据改动一律调用 `Library`，执行一律调用 `CommandRunner`。
 - 右侧标签页：`AppModel.tabs` 是 `WorkspaceTab`（`.terminal(TerminalSession)` 或 `.files(FileBrowserModel)`）的数组，`TerminalPane.swift` 画统一的标签栏并按类型显示内容。
 - `TerminalSession.swift`：每次执行一个 `TerminalSession`（SwiftTerm 视图 + pty 里的 sshpass 进程）；关闭标签给进程组发 SIGHUP，中断发 Ctrl-C。输出不保存。
 - `FileBrowserModel.swift` / `FileBrowserView.swift`：文件标签，每台服务器一个（按 `serverID` 查找），切走再回来保留目录和编辑内容。`-snapshot` 时 `AppModel.makeFileClient` 换成本地假 sshpass。
