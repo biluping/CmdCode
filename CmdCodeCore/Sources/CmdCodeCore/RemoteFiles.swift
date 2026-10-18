@@ -40,6 +40,13 @@ public struct RemoteFileContent: Sendable, Equatable {
     public var checksum: String
     public var isWritable: Bool
 
+    public init(path: String, data: Data, checksum: String, isWritable: Bool) {
+        self.path = path
+        self.data = data
+        self.checksum = checksum
+        self.isWritable = isWritable
+    }
+
     /// 能当文本编辑时返回内容：不含 NUL 字节且是合法 UTF-8。
     public var text: String? {
         guard !data.contains(0) else { return nil }

@@ -165,12 +165,22 @@ final class AppModel {
             let id = server.persistentModelID
             if let browser = fileBrowsers[id] {
                 browser.client = client
+                browser.isProduction = server.isProduction
             } else {
-                fileBrowsers[id] = FileBrowserModel(
-                    client: client, serverName: server.name,
+                let browser = FileBrowserModel(
+                    client: client, serverName: server.name, isProduction: server.isProduction,
                     initialDirectory: ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
+                browser.notify = { [weak self] in self?.showToast($0) }
+                fileBrowsers[id] = browser
             }
             selection = .files(id)
+        }
+    }
+
+    /// 有未保存修改的文件，退出前提醒。
+    var unsavedFileNames: [String] {
+        fileBrowsers.values.filter(\.isDirty).compactMap { b in
+            b.openedPath.map { "\(b.serverName)：\($0)" }
         }
     }
 

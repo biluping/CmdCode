@@ -91,6 +91,23 @@ enum Snapshot {
             ("15-files-error", {
                 model.fileBrowsers[seed.lims232.persistentModelID]?.go(to: "/usr/local/app/不存在")
             }),
+            ("16-files-reopen", {
+                let browser = model.fileBrowsers[seed.lims232.persistentModelID]
+                browser?.go(to: filesDir)
+                browser?.read(filesDir + "/application.yml")
+            }),
+            ("16-files-dirty", {
+                model.fileBrowsers[seed.lims232.persistentModelID]?.draft
+                    .replace("root: INFO", with: "root: WARN")
+            }),
+            ("17-files-conflict", {
+                // 模拟别人在打开之后改了文件
+                try? "changed by someone\n".write(toFile: filesDir + "/application.yml", atomically: false, encoding: .utf8)
+                model.fileBrowsers[seed.lims232.persistentModelID]?.requestSave()
+            }),
+            ("18-files-saved", {
+                model.fileBrowsers[seed.lims232.persistentModelID]?.conflictPending = false
+            }),
             ("09-toast", { model.showToast("已复制密码，60 秒后自动清除") }),
             ("10-terminal", {
                 model.renamingGroup = nil

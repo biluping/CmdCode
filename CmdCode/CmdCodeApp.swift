@@ -72,12 +72,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         true
     }
 
-    /// 还有命令在运行时先确认；退出会结束它们（相当于关闭终端窗口）。
+    /// 还有命令在运行、或有文件没保存时先确认；退出会结束命令（相当于关闭终端窗口）、丢弃未保存的修改。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let model, model.runningSessionCount > 0 else { return .terminateNow }
+        guard let model else { return .terminateNow }
+        let running = model.runningSessionCount
+        let unsaved = model.unsavedFileNames
+        guard running > 0 || !unsaved.isEmpty else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = "还有 \(model.runningSessionCount) 个命令正在运行"
-        alert.informativeText = "退出后这些命令会被结束，远端的前台进程也会随之停止。"
+        var details: [String] = []
+        if running > 0 {
+            alert.messageText = "还有 \(running) 个命令正在运行"
+            details.append("退出后这些命令会被结束，远端的前台进程也会随之停止。")
+        }
+        if !unsaved.isEmpty {
+            if running == 0 { alert.messageText = "还有 \(unsaved.count) 个文件没有保存" }
+            details.append("以下文件的修改会丢失：\n" + unsaved.joined(separator: "\n"))
+        }
+        alert.informativeText = details.joined(separator: "\n\n")
         alert.addButton(withTitle: "退出")
         alert.addButton(withTitle: "取消")
         if alert.runModal() == .alertFirstButtonReturn {

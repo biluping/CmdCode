@@ -2,7 +2,7 @@ import AppKit
 import CmdCodeCore
 import SwiftUI
 
-/// 服务器的远程文件页：上面路径栏，左边目录列表，右边只读查看文件内容。
+/// 服务器的远程文件页：上面路径栏，左边目录列表，右边查看和编辑文件内容。
 struct FileBrowserView: View {
     @Environment(AppModel.self) private var model
     let server: Server
@@ -29,6 +29,30 @@ struct FileBrowserView: View {
             }
         }
         .onAppear { browser.start() }
+        .alert("放弃未保存的修改？", isPresented: isPresent($browser.pendingDiscard)) {
+            Button("放弃修改", role: .destructive) { browser.confirmDiscard() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("\(browser.openedPath ?? "") 的修改还没有保存，放弃后无法恢复。")
+        }
+        .alert("文件在打开后被修改过", isPresented: $browser.conflictPending) {
+            Button("覆盖服务器上的版本", role: .destructive) { browser.save(force: true) }
+            Button("重新载入（放弃我的修改）") { browser.reloadAfterConflict() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("服务器上的 \(browser.openedPath ?? "") 已经和你打开时不一样了，可能有别人改过。")
+        }
+        .alert("保存到生产环境服务器？", isPresented: $browser.productionSavePending) {
+            Button("保存", role: .destructive) { browser.save() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("\(server.name)：\(browser.openedPath ?? "")")
+        }
+        .alert("保存失败", isPresented: isPresent($browser.saveError)) {
+            Button("好") {}
+        } message: {
+            Text(browser.saveError ?? "")
+        }
     }
 
     private var pathBar: some View {
@@ -179,7 +203,7 @@ private struct EntryRow: View {
 // MARK: - 文件内容
 
 private struct FilePreview: View {
-    let browser: FileBrowserModel
+    @Bindable var browser: FileBrowserModel
 
     var body: some View {
         if let path = browser.openedPath {
@@ -208,15 +232,37 @@ private struct FilePreview: View {
                 .textSelection(.enabled)
             if let c = browser.content {
                 if !c.isWritable { Chip(text: "只读", systemImage: "lock.fill") }
+                if browser.isDirty { Chip(text: "未保存", tint: .orange) }
                 Text(ByteCountFormatter.string(fromByteCount: Int64(c.data.count), countStyle: .file))
                     .font(Theme.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if browser.isReading { ProgressView().controlSize(.small) }
+            if browser.isReading || browser.isSaving { ProgressView().controlSize(.small) }
+            if browser.content != nil || browser.readError != nil {
+                Button { browser.requestReload() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(IconButtonStyle())
+                    .help("从服务器重新载入")
+                    .disabled(browser.isReading || browser.isSaving)
+            }
+            if browser.isEditable {
+                Button("还原") { browser.revert() }
+                    .buttonStyle(PillButtonStyle())
+                    .disabled(!browser.isDirty || browser.isSaving)
+                    .help("撤销所有修改")
+                Button { browser.requestSave() } label: { Label("保存", systemImage: "square.and.arrow.down") }
+                    .buttonStyle(PrimaryButtonStyle(tint: browser.isProduction ? Theme.danger : .accentColor))
+                    .keyboardShortcut("s")
+                    .disabled(!browser.isDirty || browser.isSaving)
+                    .help(browser.isProduction ? "保存到生产环境服务器（会先确认）" : "保存到服务器（⌘S）")
+            }
+            Button { browser.requestClose() } label: { Image(systemName: "xmark") }
+                .buttonStyle(IconButtonStyle())
+                .help(browser.isDirty ? "关闭文件（放弃未保存的修改）" : "关闭文件")
+                .disabled(browser.isSaving)
         }
         .padding(.horizontal, 14)
-        .frame(height: 34)
+        .frame(height: 40)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
 
@@ -224,8 +270,8 @@ private struct FilePreview: View {
         if let error = browser.readError {
             message(error, systemImage: "exclamationmark.triangle.fill", tint: Theme.danger)
         } else if let c = browser.content {
-            if let text = c.text {
-                ReadOnlyTextView(text: text)
+            if c.text != nil {
+                CodeTextView(text: $browser.draft, isEditable: browser.isEditable && !browser.isSaving)
             } else {
                 message("不是文本文件，无法显示", systemImage: "doc.questionmark", tint: .secondary)
             }
@@ -245,21 +291,40 @@ private struct FilePreview: View {
     }
 }
 
-/// 只读、可选中的等宽文本，不自动折行（配置文件按原样对齐），可横向滚动。
-private struct ReadOnlyTextView: NSViewRepresentable {
-    let text: String
+/// 等宽文本编辑器：不自动折行（配置文件按原样对齐），可横向滚动；关掉智能引号等自动替换，
+/// 免得把配置里的 `"` 换成中文引号。没有写权限时只读。
+private struct CodeTextView: NSViewRepresentable {
+    @Binding var text: String
+    var isEditable: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
         scroll.hasHorizontalScroller = true
         scroll.drawsBackground = false
         guard let view = scroll.documentView as? NSTextView else { return scroll }
-        view.isEditable = false
+        view.delegate = context.coordinator
+        view.isEditable = isEditable
         view.isSelectable = true
         view.isRichText = false
+        view.allowsUndo = true
+        view.usesFindBar = true
+        view.isIncrementalSearchingEnabled = true
+        view.isAutomaticQuoteSubstitutionEnabled = false
+        view.isAutomaticDashSubstitutionEnabled = false
+        view.isAutomaticTextReplacementEnabled = false
+        view.isAutomaticSpellingCorrectionEnabled = false
+        view.isContinuousSpellCheckingEnabled = false
+        view.isGrammarCheckingEnabled = false
+        view.isAutomaticLinkDetectionEnabled = false
+        view.smartInsertDeleteEnabled = false
         view.drawsBackground = false
+        // 大文件只排版可见部分，打开和滚动都不卡。
+        view.layoutManager?.allowsNonContiguousLayout = true
         view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         view.textColor = .labelColor
+        view.insertionPointColor = .labelColor
         view.textContainerInset = NSSize(width: 10, height: 10)
         // 关闭自动折行：文本容器无限宽，视图随内容横向伸展。
         view.isHorizontallyResizable = true
@@ -272,8 +337,25 @@ private struct ReadOnlyTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let view = scroll.documentView as? NSTextView, view.string != text else { return }
-        view.string = text
-        view.scroll(.zero)
+        guard let view = scroll.documentView as? NSTextView else { return }
+        context.coordinator.text = $text
+        view.isEditable = isEditable
+        // 只有外部换了内容（打开别的文件、重新载入、还原）才覆盖，打字时不动光标。
+        if view.string != text {
+            view.string = text
+            if let storage = view.textStorage { view.undoManager?.removeAllActions(withTarget: storage) }
+            view.scroll(.zero)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) { self.text = text }
+
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            text.wrappedValue = view.string
+        }
     }
 }

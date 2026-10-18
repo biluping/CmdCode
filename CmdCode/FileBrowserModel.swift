@@ -9,6 +9,8 @@ final class FileBrowserModel {
     /// 每次进入文件页时按服务器当前的凭据重新生成，改了密码也能用。
     var client: RemoteFileClient
     let serverName: String
+    /// 生产环境服务器保存前要确认。同样每次进入文件页时刷新。
+    var isProduction: Bool
     /// 首次打开的目录：服务器的工作目录，没配置就是登录用户的家目录（nil）。
     let initialDirectory: String?
 
@@ -23,12 +25,32 @@ final class FileBrowserModel {
     private(set) var isReading = false
     private(set) var readError: String?
 
+    /// 编辑器里的文字；和 `content.text` 不同就是有未保存的修改。
+    var draft = ""
+    private(set) var isSaving = false
+    var saveError: String?
+    /// 保存时发现文件在打开后被别人改过，等用户决定覆盖还是重新载入。
+    var conflictPending = false
+    /// 生产环境：等用户确认保存。
+    var productionSavePending = false
+    /// 有未保存的修改时要做的动作，等用户确认放弃修改。
+    var pendingDiscard: DiscardAction?
+    /// 保存成功等提示（由 AppModel 接到底部提示条）。
+    @ObservationIgnored var notify: (String) -> Void = { _ in }
+
+    enum DiscardAction {
+        case open(String)
+        case reload
+        case close
+    }
+
     @ObservationIgnored private var listTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
 
-    init(client: RemoteFileClient, serverName: String, initialDirectory: String?) {
+    init(client: RemoteFileClient, serverName: String, isProduction: Bool, initialDirectory: String?) {
         self.client = client
         self.serverName = serverName
+        self.isProduction = isProduction
         self.initialDirectory = initialDirectory
         pathInput = initialDirectory ?? "~"
     }
@@ -75,9 +97,10 @@ final class FileBrowserModel {
         listing.map { RemoteFileScript.parent(of: $0.path) != nil } ?? false
     }
 
+    /// 刷新目录；打开的文件没改过就一起重新读，改过就保留编辑内容。
     func refresh() {
         go(to: listing?.path ?? initialDirectory)
-        if let openedPath { read(openedPath) }
+        if let openedPath, !isDirty { read(openedPath) }
     }
 
     /// 点了列表里的条目：目录进入，文件打开查看。
@@ -86,15 +109,109 @@ final class FileBrowserModel {
         let path = RemoteFileScript.join(dir, entry.name)
         switch entry.kind {
         case .directory: go(to: path)
-        case .file: read(path)
+        case .file: requestOpen(path)
         case .other: break
         }
+    }
+
+    // MARK: 编辑与保存
+
+    var isDirty: Bool {
+        guard let text = content?.text else { return false }
+        return draft != text
+    }
+
+    /// 能编辑：是文本文件且有写权限。
+    var isEditable: Bool {
+        content.map { $0.isWritable && $0.text != nil } ?? false
+    }
+
+    /// 打开另一个文件；当前文件有未保存的修改时先确认。
+    func requestOpen(_ path: String) {
+        guard path != openedPath || content == nil else { return }
+        if isDirty { pendingDiscard = .open(path) } else { read(path) }
+    }
+
+    /// 从服务器重新载入当前文件；有未保存的修改时先确认。
+    func requestReload() {
+        guard openedPath != nil else { return }
+        if isDirty { pendingDiscard = .reload } else if let openedPath { read(openedPath) }
+    }
+
+    func confirmDiscard() {
+        guard let action = pendingDiscard else { return }
+        pendingDiscard = nil
+        switch action {
+        case .open(let path): read(path)
+        case .reload: if let openedPath { read(openedPath) }
+        case .close: close()
+        }
+    }
+
+    /// 关闭当前文件；有未保存的修改时先确认放弃。
+    func requestClose() {
+        guard openedPath != nil, !isSaving else { return }
+        if isDirty { pendingDiscard = .close } else { close() }
+    }
+
+    private func close() {
+        readTask?.cancel()
+        openedPath = nil
+        content = nil
+        draft = ""
+        readError = nil
+        isReading = false
+    }
+
+    /// 撤销所有修改，回到打开时的内容。
+    func revert() {
+        if let text = content?.text { draft = text }
+    }
+
+    /// 保存（⌘S）。生产环境服务器先确认。
+    func requestSave() {
+        guard isEditable, isDirty, !isSaving else { return }
+        if isProduction { productionSavePending = true } else { save() }
+    }
+
+    /// 写回服务器。`force` 为 true 时不检查冲突，直接覆盖。
+    func save(force: Bool = false) {
+        guard let content, isEditable, !isSaving else { return }
+        let data = Data(draft.utf8)
+        let path = content.path
+        let expected = force ? nil : content.checksum
+        isSaving = true
+        saveError = nil
+        let client = client
+        Task {
+            do {
+                let checksum = try await client.write(data, to: path, expectedChecksum: expected)
+                if openedPath == path {
+                    self.content = RemoteFileContent(path: path, data: data, checksum: checksum, isWritable: true)
+                }
+                notify("已保存 \((path as NSString).lastPathComponent)")
+                // 大小、修改时间变了，刷新一下列表。
+                if let dir = listing?.path, (path as NSString).deletingLastPathComponent == dir { go(to: dir) }
+            } catch RemoteFileError.conflict {
+                conflictPending = true
+            } catch {
+                saveError = Self.message(error)
+            }
+            isSaving = false
+        }
+    }
+
+    /// 冲突后选择“重新载入”：放弃自己的修改，读服务器上的新版本。
+    func reloadAfterConflict() {
+        conflictPending = false
+        if let openedPath { read(openedPath) }
     }
 
     func read(_ path: String) {
         readTask?.cancel()
         openedPath = path
         content = nil
+        draft = ""
         readError = nil
         isReading = true
         let client = client
@@ -103,6 +220,7 @@ final class FileBrowserModel {
                 let result = try await client.read(path: path)
                 guard !Task.isCancelled else { return }
                 content = result
+                draft = result.text ?? ""
             } catch {
                 guard !Task.isCancelled else { return }
                 readError = Self.message(error)
