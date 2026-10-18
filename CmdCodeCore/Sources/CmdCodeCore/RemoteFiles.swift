@@ -1,0 +1,340 @@
+import Foundation
+
+/// 远程目录里的一个条目。
+public struct RemoteFileEntry: Sendable, Equatable, Identifiable {
+    public enum Kind: Sendable, Equatable {
+        case directory, file, other
+    }
+
+    public var name: String
+    /// 符号链接按指向的目标算类型；链接断了算 `.other`。
+    public var kind: Kind
+    public var isSymlink: Bool
+    public var isWritable: Bool
+    public var size: Int64
+    public var modified: Date
+
+    public var id: String { name }
+
+    public init(name: String, kind: Kind, isSymlink: Bool, isWritable: Bool, size: Int64, modified: Date) {
+        self.name = name
+        self.kind = kind
+        self.isSymlink = isSymlink
+        self.isWritable = isWritable
+        self.size = size
+        self.modified = modified
+    }
+}
+
+public struct RemoteDirectoryListing: Sendable, Equatable {
+    /// 远端 `pwd` 得到的绝对路径。
+    public var path: String
+    /// 目录在前，再按名称排序。
+    public var entries: [RemoteFileEntry]
+}
+
+public struct RemoteFileContent: Sendable, Equatable {
+    public var path: String
+    public var data: Data
+    /// 打开时远端 `cksum` 的输出，保存时用来检测冲突。
+    public var checksum: String
+    public var isWritable: Bool
+
+    /// 能当文本编辑时返回内容：不含 NUL 字节且是合法 UTF-8。
+    public var text: String? {
+        guard !data.contains(0) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}
+
+public enum RemoteFileError: Error, Equatable, LocalizedError {
+    case sshpassNotFound
+    case notRegularFile(String)
+    case notWritable(String)
+    case tooLarge(path: String, size: Int64)
+    /// 打开之后文件被别人改过。
+    case conflict(String)
+    case timeout
+    case badOutput
+    /// 其他失败：远端（或 ssh）的退出码和 stderr。
+    case remote(status: Int32, message: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .sshpassNotFound: SSHPassLocator.installHint
+        case .notRegularFile(let p): "不是普通文件：\(p)"
+        case .notWritable(let p): "没有写权限：\(p)"
+        case .tooLarge(let p, let size):
+            "文件太大（\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))），不能打开：\(p)"
+        case .conflict(let p): "文件在打开后被修改过：\(p)"
+        case .timeout: "操作超时"
+        case .badOutput: "远端返回的内容无法解析"
+        case .remote(let status, let message): message.isEmpty ? "执行失败（退出码 \(status)）" : message
+        }
+    }
+}
+
+/// 远程文件操作的内层脚本和输出解析。全部是纯函数，脚本经 `ScriptBuilder.remoteCommand(script:)` 发到远端。
+///
+/// 约定的退出码：20 不是普通文件，21 文件太大（stdout 是大小），22 冲突，23 没有写权限。
+public enum RemoteFileScript {
+    public static let maxReadBytes: Int64 = 5 * 1024 * 1024
+
+    static let statusNotRegular: Int32 = 20
+    static let statusTooLarge: Int32 = 21
+    static let statusConflict: Int32 = 22
+    static let statusNotWritable: Int32 = 23
+
+    /// 列目录：先输出 `$PWD`，再每个条目一条“类型 链接 可写 大小 修改时间 名称”，记录以 NUL 结尾。
+    /// 目录为空时列登录用户的家目录。
+    public static func list(directory: String?) -> String {
+        let cd = ScriptBuilder.normalizedWorkingDirectory(directory).map { "cd -- \(ScriptBuilder.shq($0)) || exit 1" }
+            ?? "cd || exit 1"
+        return """
+        \(cd)
+        [ -r . ] && [ -x . ] || { echo "没有权限读取目录：$PWD" >&2; exit 1; }
+        shopt -s dotglob nullglob
+        if stat -c %s / >/dev/null 2>&1; then _gnu=1; else _gnu=; fi
+        printf '%s\\0' "$PWD"
+        for f in *; do
+          if [ -L "$f" ]; then l=1; else l=0; fi
+          if [ -d "$f" ]; then t=d; elif [ -f "$f" ]; then t=f; else t=o; fi
+          if [ -w "$f" ]; then w=1; else w=0; fi
+          if [ -n "$_gnu" ]; then m=$(stat -L -c '%s %Y' -- "$f" 2>/dev/null); else m=$(stat -L -f '%z %m' -- "$f" 2>/dev/null); fi
+          printf '%s %s %s %s %s\\0' "$t" "$l" "$w" "${m:-0 0}" "$f"
+        done
+        """
+    }
+
+    /// 读文件：第一行是否可写（1/0），第二行 `cksum`，之后是 base64 内容。
+    public static func read(path: String, maxBytes: Int64 = maxReadBytes) -> String {
+        """
+        f=\(ScriptBuilder.shq(path))
+        [ -e "$f" ] || { echo "文件不存在：$f" >&2; exit 1; }
+        [ -f "$f" ] || { echo "不是普通文件：$f" >&2; exit \(statusNotRegular); }
+        [ -r "$f" ] || { echo "没有读权限：$f" >&2; exit 1; }
+        s=$(wc -c < "$f") || exit 1
+        s=${s//[!0-9]/}
+        if [ "$s" -gt \(maxBytes) ]; then printf '%s' "$s"; exit \(statusTooLarge); fi
+        if [ -w "$f" ]; then w=1; else w=0; fi
+        c=$(cksum < "$f") || exit 1
+        printf '%s\\n%s\\n' "$w" "$c"
+        base64 < "$f"
+        """
+    }
+
+    /// 写文件：内容从 stdin 读进远端临时文件，核对字节数后 `cat` 覆盖原文件（权限、属主、inode 不变），
+    /// 最后输出新的 `cksum`。`expectedChecksum` 为 nil 时不检查冲突（强制覆盖）。
+    public static func write(path: String, byteCount: Int, expectedChecksum: String?) -> String {
+        """
+        f=\(ScriptBuilder.shq(path))
+        e=\(ScriptBuilder.shq(expectedChecksum ?? ""))
+        [ -f "$f" ] || { echo "不是普通文件：$f" >&2; exit \(statusNotRegular); }
+        [ -w "$f" ] || { echo "没有写权限：$f" >&2; exit \(statusNotWritable); }
+        if [ -n "$e" ] && [ "$(cksum < "$f")" != "$e" ]; then echo "文件在打开后被修改过：$f" >&2; exit \(statusConflict); fi
+        t=$(mktemp "${TMPDIR:-/tmp}/cmdcode.XXXXXX") || exit 1
+        trap 'rm -f "$t"' EXIT
+        cat > "$t" || exit 1
+        n=$(wc -c < "$t"); n=${n//[!0-9]/}
+        [ "$n" = \(byteCount) ] || { echo "内容没有传完整（收到 $n 字节，应为 \(byteCount)），未写入" >&2; exit 1; }
+        cat -- "$t" > "$f" || exit 1
+        cksum < "$f"
+        """
+    }
+
+    public static func parseListing(_ data: Data) throws -> RemoteDirectoryListing {
+        var records = data.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
+        // 每条记录都以 NUL 结尾，最后一段是空的。
+        guard records.count >= 2, records.removeLast().isEmpty else { throw RemoteFileError.badOutput }
+        let path = records.removeFirst()
+        let entries = try records.map { record -> RemoteFileEntry in
+            let parts = record.split(separator: " ", maxSplits: 5, omittingEmptySubsequences: false)
+            guard parts.count == 6, let size = Int64(parts[3]), let mtime = TimeInterval(parts[4]) else {
+                throw RemoteFileError.badOutput
+            }
+            let kind: RemoteFileEntry.Kind = switch parts[0] {
+            case "d": .directory
+            case "f": .file
+            default: .other
+            }
+            return RemoteFileEntry(name: String(parts[5]), kind: kind, isSymlink: parts[1] == "1",
+                                   isWritable: parts[2] == "1", size: size,
+                                   modified: Date(timeIntervalSince1970: mtime))
+        }
+        return RemoteDirectoryListing(path: path, entries: entries.sorted {
+            if ($0.kind == .directory) != ($1.kind == .directory) { return $0.kind == .directory }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        })
+    }
+
+    public static func parseRead(_ data: Data, path: String) throws -> RemoteFileContent {
+        let lines = data.split(separator: UInt8(ascii: "\n"), maxSplits: 2, omittingEmptySubsequences: false)
+        guard lines.count >= 2 else { throw RemoteFileError.badOutput }
+        let body = lines.count == 3 ? Data(lines[2]) : Data()
+        let trimmed = body.filter { $0 != UInt8(ascii: "\n") && $0 != UInt8(ascii: "\r") }
+        guard let content = trimmed.isEmpty ? Data() : Data(base64Encoded: trimmed, options: .ignoreUnknownCharacters) else {
+            throw RemoteFileError.badOutput
+        }
+        return RemoteFileContent(path: path, data: content,
+                                 checksum: String(decoding: lines[1], as: UTF8.self),
+                                 isWritable: lines[0].elementsEqual("1".utf8))
+    }
+
+    /// 绝对路径拼接：`/` + `etc` → `/etc`。
+    public static func join(_ directory: String, _ name: String) -> String {
+        directory.hasSuffix("/") ? directory + name : directory + "/" + name
+    }
+
+    /// 上级目录；已经是根目录时返回 nil。
+    public static func parent(of path: String) -> String? {
+        guard path != "/" else { return nil }
+        let parent = (path as NSString).deletingLastPathComponent
+        return parent.isEmpty ? "/" : parent
+    }
+}
+
+/// 在一台服务器上做远程文件操作。每个操作单独起一次 `sshpass -e ssh -T`，不写本地临时文件。
+public struct RemoteFileClient: Sendable {
+    public var target: SSHTarget
+    public var sshpassPath: String
+    public var timeout: TimeInterval
+
+    public init(target: SSHTarget, sshpassPath: String, timeout: TimeInterval = 30) {
+        self.target = target
+        self.sshpassPath = sshpassPath
+        self.timeout = timeout
+    }
+
+    public init(target: SSHTarget, locator: SSHPassLocator = SSHPassLocator()) throws {
+        guard let path = locator.locate() else { throw RemoteFileError.sshpassNotFound }
+        self.init(target: target, sshpassPath: path)
+    }
+
+    public func list(directory: String?) async throws -> RemoteDirectoryListing {
+        let r = try await run(RemoteFileScript.list(directory: directory))
+        try check(r, path: directory ?? "~")
+        return try RemoteFileScript.parseListing(r.stdout)
+    }
+
+    public func read(path: String) async throws -> RemoteFileContent {
+        let r = try await run(RemoteFileScript.read(path: path))
+        if r.status == RemoteFileScript.statusTooLarge {
+            throw RemoteFileError.tooLarge(path: path, size: Int64(String(decoding: r.stdout, as: UTF8.self)) ?? 0)
+        }
+        try check(r, path: path)
+        return try RemoteFileScript.parseRead(r.stdout, path: path)
+    }
+
+    /// 写回文件，返回新的校验值。`expectedChecksum` 为 nil 表示不检查冲突，直接覆盖。
+    public func write(_ data: Data, to path: String, expectedChecksum: String?) async throws -> String {
+        let script = RemoteFileScript.write(path: path, byteCount: data.count, expectedChecksum: expectedChecksum)
+        let r = try await run(script, input: data)
+        try check(r, path: path)
+        return String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func check(_ r: ProcessResult, path: String) throws {
+        switch r.status {
+        case 0: return
+        case RemoteFileScript.statusNotRegular: throw RemoteFileError.notRegularFile(path)
+        case RemoteFileScript.statusNotWritable: throw RemoteFileError.notWritable(path)
+        case RemoteFileScript.statusConflict: throw RemoteFileError.conflict(path)
+        default:
+            var message = String(decoding: r.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            // sshpass 密码错误时不输出任何内容，只有退出码 5。
+            if message.isEmpty && r.status == 5 { message = "密码错误（sshpass 退出码 5）" }
+            throw RemoteFileError.remote(status: r.status, message: message)
+        }
+    }
+
+    private func run(_ script: String, input: Data? = nil) async throws -> ProcessResult {
+        let invocation = ScriptBuilder.sshInvocation(
+            target: target, sshpassPath: sshpassPath,
+            remoteCommand: ScriptBuilder.remoteCommand(script: script), allocateTTY: false)
+        var env = invocation.environment
+        // sshpass 通过 PATH 找 ssh。
+        env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
+        let (environment, timeout) = (env, timeout)
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(with: Result {
+                    try ProcessResult.run(invocation.executable, invocation.arguments,
+                                          environment: environment, input: input, timeout: timeout)
+                })
+            }
+        }
+    }
+}
+
+struct ProcessResult: Sendable {
+    var stdout: Data
+    var stderr: Data
+    var status: Int32
+
+    /// 同步运行一个进程，输出收在内存里。会阻塞当前线程，别在主线程调用。
+    static func run(_ executable: String, _ arguments: [String], environment: [String: String],
+                    input: Data?, timeout: TimeInterval) throws -> ProcessResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = environment
+        let outPipe = Pipe(), errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        let inPipe = input.map { _ in Pipe() }
+        process.standardInput = inPipe ?? FileHandle.nullDevice
+
+        let buffers = OutputBuffers()
+        let eof = DispatchGroup()
+        for (pipe, isOut) in [(outPipe, true), (errPipe, false)] {
+            eof.enter()
+            pipe.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    eof.leave()
+                } else {
+                    buffers.append(chunk, toOut: isOut)
+                }
+            }
+        }
+
+        try process.run()
+        if let inPipe, let input {
+            DispatchQueue.global().async {
+                try? inPipe.fileHandleForWriting.write(contentsOf: input)
+                try? inPipe.fileHandleForWriting.close()
+            }
+        }
+        let timer = DispatchWorkItem { [weak process] in
+            buffers.markTimedOut()
+            process?.terminate()
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
+        process.waitUntilExit()
+        timer.cancel()
+        // 数据在进程退出前已写完；管道写端偶尔会被同时启动的其他子进程继承而迟迟等不到 EOF，最多再等 1 秒。
+        _ = eof.wait(timeout: .now() + 1)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        let (out, err, timedOut) = buffers.snapshot()
+        if timedOut { throw RemoteFileError.timeout }
+        return ProcessResult(stdout: out, stderr: err, status: process.terminationStatus)
+    }
+}
+
+private final class OutputBuffers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var out = Data()
+    private var err = Data()
+    private var timedOut = false
+
+    func append(_ chunk: Data, toOut: Bool) {
+        lock.withLock { if toOut { out.append(chunk) } else { err.append(chunk) } }
+    }
+
+    func markTimedOut() { lock.withLock { timedOut = true } }
+
+    func snapshot() -> (Data, Data, Bool) { lock.withLock { (out, err, timedOut) } }
+}

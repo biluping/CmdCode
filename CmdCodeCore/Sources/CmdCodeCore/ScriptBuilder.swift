@@ -76,8 +76,12 @@ public enum ScriptBuilder {
     ///
     /// 只含固定文本和 base64 字符；不占用 stdin，所以 vim、top 等交互程序可用。
     public static func remoteCommand(command: String, workingDirectory: String?, stayInShell: Bool = false) -> String {
-        let encoded = base64(innerScript(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell))
-        return "bash -lc \"$(printf %s \(encoded) | base64 -d)\""
+        remoteCommand(script: innerScript(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell))
+    }
+
+    /// 任意内层脚本对应的远端命令。远程文件操作用它直接传自己生成的脚本。
+    public static func remoteCommand(script: String) -> String {
+        "bash -lc \"$(printf %s \(base64(script)) | base64 -d)\""
     }
 
     /// 测试连接用的命令。
@@ -97,10 +101,24 @@ public enum ScriptBuilder {
         workingDirectory: String?,
         stayInShell: Bool = false
     ) -> SSHInvocation {
+        sshInvocation(
+            target: target, sshpassPath: sshpassPath,
+            remoteCommand: remoteCommand(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell),
+            allocateTTY: true)
+    }
+
+    /// 同上，远端命令已经拼好。`allocateTTY` 为 false 时用 `-T`：不分配远端终端，
+    /// stdin/stdout 是干净的字节流，远程文件读写用这种方式。
+    public static func sshInvocation(
+        target: SSHTarget,
+        sshpassPath: String,
+        remoteCommand: String,
+        allocateTTY: Bool
+    ) -> SSHInvocation {
         SSHInvocation(
             executable: sshpassPath,
             arguments: [
-                "-e", "ssh", "-t",
+                "-e", "ssh", allocateTTY ? "-t" : "-T",
                 "-p", String(target.port),
                 "-o", "ConnectTimeout=10",
                 "-o", "ServerAliveInterval=30",
@@ -109,7 +127,7 @@ public enum ScriptBuilder {
                 "-o", "LogLevel=ERROR",
                 "-l", target.username,
                 "--", target.host,
-                remoteCommand(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell),
+                remoteCommand,
             ],
             environment: ["SSHPASS": target.password])
     }
