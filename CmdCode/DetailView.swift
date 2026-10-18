@@ -18,6 +18,12 @@ struct DetailView: View {
             } else {
                 WelcomeView()
             }
+        case .files(let id):
+            if let server = context.model(for: id) as? Server, !server.isDeleted, let browser = model.fileBrowsers[id] {
+                FileBrowserView(server: server, browser: browser)
+            } else {
+                WelcomeView()
+            }
         case nil:
             WelcomeView()
         }
@@ -97,6 +103,10 @@ struct ServerDetailView: View {
             .buttonStyle(PillButtonStyle())
             Button { model.login(server) } label: {
                 Label("登录服务器", systemImage: "terminal")
+            }
+            .buttonStyle(PillButtonStyle())
+            Button { model.openFiles(server) } label: {
+                Label("文件", systemImage: "folder")
             }
             .buttonStyle(PillButtonStyle())
             Button { model.sheet = .editServer(server) } label: { Image(systemName: "pencil") }

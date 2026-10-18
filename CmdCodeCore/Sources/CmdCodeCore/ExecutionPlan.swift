@@ -30,7 +30,7 @@ public struct ExecutionPlan: Sendable, Equatable {
 }
 
 extension Server {
-    func sshTarget() throws -> SSHTarget {
+    public func sshTarget() throws -> SSHTarget {
         guard let c = credential else { throw LibraryError.serverHasNoCredential(serverName: name) }
         return SSHTarget(host: host, port: port, username: c.username, password: c.password)
     }

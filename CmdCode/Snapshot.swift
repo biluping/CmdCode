@@ -52,6 +52,8 @@ enum Snapshot {
         guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) else { return }
         window.setContentSize(NSSize(width: 1180, height: 760))
 
+        let (filesDir, fakeSshpass) = makeFileFixture()
+        model.makeFileClient = { RemoteFileClient(target: $0, sshpassPath: fakeSshpass) }
         let scenes: [(String, () -> Void)] = [
             ("01-welcome", { model.selection = nil }),
             ("02-server", {
@@ -79,9 +81,20 @@ enum Snapshot {
                 model.selection = nil
                 model.renamingGroup = model.library.groups().first?.persistentModelID
             }),
+            ("14-files", {
+                model.renamingGroup = nil
+                model.openFiles(seed.lims232)
+                let browser = model.fileBrowsers[seed.lims232.persistentModelID]
+                browser?.go(to: filesDir)
+                browser?.read(filesDir + "/application.yml")
+            }),
+            ("15-files-error", {
+                model.fileBrowsers[seed.lims232.persistentModelID]?.go(to: "/usr/local/app/不存在")
+            }),
             ("09-toast", { model.showToast("已复制密码，60 秒后自动清除") }),
             ("10-terminal", {
                 model.renamingGroup = nil
+                model.fileBrowsers.removeAll()
                 if model.sessions.isEmpty {
                     model.open(demoSession("看日志", server: "135 - lims", production: true,
                                            script: "for i in 1 2 3; do echo \"$(date +%T) INFO  request handled in ${i}2ms\"; done; sleep 600"))
@@ -119,6 +132,50 @@ enum Snapshot {
         model.hangUpAll()
         model.sessions.removeAll()
         NSApp.terminate(nil)
+    }
+
+    /// 远程文件页用的示例：本地临时目录 + 假的 sshpass（用本地 bash 执行远端命令）。
+    private static func makeFileFixture() -> (directory: String, sshpass: String) {
+        let fm = FileManager.default
+        let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("cmdcode-snapshot-files")
+        try? fm.removeItem(atPath: base)
+        let dir = base + "/lims"
+        for sub in ["conf", "logs", "lib"] { try? fm.createDirectory(atPath: dir + "/" + sub, withIntermediateDirectories: true) }
+        let files: [(String, String)] = [
+            ("application.yml", """
+            server:
+              port: 8080
+              servlet:
+                context-path: /lims
+
+            spring:
+              datasource:
+                url: jdbc:mysql://10.0.144.135:3306/lims?useUnicode=true&characterEncoding=utf8
+                username: lims
+                password: ${DB_PASSWORD}
+              redis:
+                host: 10.0.144.232
+                port: 6379
+
+            logging:
+              level:
+                root: INFO
+                com.lims: DEBUG   # 排查问题时临时打开
+
+            """),
+            ("build.sh", "#!/bin/bash\nset -e\ngit pull\nmvn -q package -DskipTests\n"),
+            (".env", "DB_PASSWORD=change-me\n"),
+            ("README.md", "# lims\n"),
+        ]
+        for (name, text) in files { try? text.write(toFile: dir + "/" + name, atomically: true, encoding: .utf8) }
+        try? Data(count: 2_400_000).write(to: URL(fileURLWithPath: dir + "/lims.jar"))
+        try? fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: dir + "/README.md")
+        try? fm.createSymbolicLink(atPath: dir + "/current.log", withDestinationPath: "logs/lims.log")
+
+        let fake = base + "/fake-sshpass"
+        try? "#!/bin/bash\nfor last; do :; done\nexec /bin/bash -c \"$last\"\n".write(toFile: fake, atomically: true, encoding: .utf8)
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake)
+        return (dir, fake)
     }
 
     private static func demoSession(_ command: String, server: String, production: Bool, script: String) -> TerminalSession {

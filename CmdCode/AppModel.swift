@@ -8,6 +8,8 @@ enum SidebarSelection: Hashable {
     /// 右侧显示内嵌终端。
     case terminal
     case server(PersistentIdentifier)
+    /// 服务器的远程文件浏览。
+    case files(PersistentIdentifier)
 }
 
 /// 弹出的编辑表单。
@@ -78,6 +80,10 @@ final class AppModel {
     var activeSessionID: TerminalSession.ID?
     /// 主窗口被关闭后重新打开它（由界面注入）。
     @ObservationIgnored var reopenWindow: (() -> Void)?
+    /// 远程文件浏览的状态，按服务器保存。
+    var fileBrowsers: [PersistentIdentifier: FileBrowserModel] = [:]
+    /// 生成远程文件客户端（截图自检时换成本地假的 sshpass）。
+    @ObservationIgnored var makeFileClient: (SSHTarget) throws -> RemoteFileClient = { try RemoteFileClient(target: $0) }
     var alert: AppAlert?
     /// 底部的短暂提示，比如“已复制密码”。
     var toast: String?
@@ -150,6 +156,24 @@ final class AppModel {
         session.start()
     }
 
+    // MARK: 远程文件
+
+    /// 打开服务器的文件浏览页；已经打开过的保留原来的目录。
+    func openFiles(_ server: Server) {
+        perform {
+            let client = try makeFileClient(server.sshTarget())
+            let id = server.persistentModelID
+            if let browser = fileBrowsers[id] {
+                browser.client = client
+            } else {
+                fileBrowsers[id] = FileBrowserModel(
+                    client: client, serverName: server.name,
+                    initialDirectory: ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
+            }
+            selection = .files(id)
+        }
+    }
+
     // MARK: 终端会话
 
     var activeSession: TerminalSession? {
@@ -196,7 +220,8 @@ final class AppModel {
             case .group(let g):
                 try library.deleteGroup(g)
             case .server(let s, _):
-                if selection == .server(s.persistentModelID) { selection = nil }
+                if selection == .server(s.persistentModelID) || selection == .files(s.persistentModelID) { selection = nil }
+                fileBrowsers[s.persistentModelID] = nil
                 try library.deleteServer(s)
             case .command(let c):
                 try library.deleteCommand(c)

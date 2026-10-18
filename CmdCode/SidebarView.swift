@@ -436,7 +436,7 @@ private struct ServerRows: View {
 
     private var id: PersistentIdentifier { server.persistentModelID }
     private var isExpanded: Bool { model.expandedServers.contains(id) }
-    private var isSelected: Bool { model.selection == .server(id) }
+    private var isSelected: Bool { model.selection == .server(id) || model.selection == .files(id) }
 
     var body: some View {
         TreeRow(depth: 1, isExpanded: isExpanded, icon: "server.rack",
@@ -491,6 +491,7 @@ private struct ServerRows: View {
     private var serverMenu: some View {
         Button("新建命令") { model.sheet = .newCommand(server) }
         Button("登录服务器") { model.login(server) }
+        Button("浏览文件") { model.openFiles(server) }
         Button("测试连接") { model.testConnection(server) }
         Divider()
         Button("编辑") { model.sheet = .editServer(server) }
