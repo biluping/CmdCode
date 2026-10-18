@@ -55,6 +55,7 @@ struct SidebarView: View {
                 Spacer()
                 Button { model.sheet = .newGroup } label: { Image(systemName: "folder.badge.plus") }
                     .buttonStyle(IconButtonStyle(size: 22))
+                    .focusable(false)
                     .help("新建分组")
             }
             .padding(.leading, 18)
@@ -127,6 +128,8 @@ private struct SidebarItem<Trailing: View>: View {
             .rowHighlight(selected: selected)
         }
         .buttonStyle(.plain)
+        // 不接收键盘焦点：否则窗口一打开焦点落在第一项上，会画出蓝色焦点环。
+        .focusable(false)
     }
 }
 
