@@ -238,10 +238,10 @@ private struct TabItem: View {
     }
 }
 
-/// 运行状态：运行中绿色呼吸点，成功灰色对勾，失败红色。
+/// 运行状态：运行中绿点，成功灰色对勾，失败红色。
+/// 绿点不做呼吸动画：SwiftUI 的无限动画会让整个窗口每帧重算重绘，空闲时也占三成 CPU。
 struct StatusDot: View {
     let state: TerminalSession.State
-    @State private var pulse = false
 
     var body: some View {
         Group {
@@ -250,9 +250,6 @@ struct StatusDot: View {
                 Circle()
                     .fill(Theme.success)
                     .frame(width: 7, height: 7)
-                    .opacity(pulse ? 0.35 : 1)
-                    .animation(.easeInOut(duration: 0.9).repeatForever(), value: pulse)
-                    .onAppear { pulse = true }
             case .exited(0):
                 Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
             case .exited, .failed:
