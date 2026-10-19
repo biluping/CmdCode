@@ -55,7 +55,6 @@ public struct RemoteFileContent: Sendable, Equatable {
 }
 
 public enum RemoteFileError: Error, Equatable, LocalizedError {
-    case sshpassNotFound
     case notRegularFile(String)
     case notWritable(String)
     case tooLarge(path: String, size: Int64)
@@ -72,7 +71,6 @@ public enum RemoteFileError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .sshpassNotFound: SSHPassLocator.installHint
         case .notRegularFile(let p): "不是普通文件：\(p)"
         case .notWritable(let p): "没有写权限：\(p)"
         case .tooLarge(let p, let size):
@@ -260,27 +258,31 @@ public enum RemoteFileScript {
     }
 }
 
-/// 在一台服务器上做远程文件操作。每个操作单独起一次 `sshpass -e ssh -T`，不写本地临时文件。
+/// 在一台服务器上做远程文件操作。每个操作单独起一次 `ssh -T`，不写本地临时文件。
 public struct RemoteFileClient: Sendable {
     public var target: SSHTarget
-    public var sshpassPath: String
+    public var sshPath: String
     public var timeout: TimeInterval
-    /// 连接复用的控制 socket 目录；nil 表示每次新建连接（测试用的假 sshpass 不认 ssh 参数）。
+    /// 连接复用的控制 socket 目录；nil 表示每次新建连接（测试用的假 ssh 不认 ssh 参数）。
     public var controlDirectory: String?
+    /// askpass 脚本所在目录。
+    public var askPassDirectory: String
 
-    /// 控制 socket 放在 /tmp 下的短路径里：macOS 的 socket 路径上限是 104 字节。
-    public static let defaultControlDirectory = "/tmp/cmdcode-\(getuid())"
+    /// 控制 socket 和 askpass 脚本放在同一个运行目录里。
+    public static let defaultControlDirectory = AskPass.defaultDirectory
 
-    public init(target: SSHTarget, sshpassPath: String, timeout: TimeInterval = 30, controlDirectory: String? = nil) {
-        self.target = target
-        self.sshpassPath = sshpassPath
-        self.timeout = timeout
-        self.controlDirectory = controlDirectory
+    /// 真实服务器用：系统 ssh，开启连接复用。
+    public init(target: SSHTarget) {
+        self.init(target: target, sshPath: ScriptBuilder.sshPath, controlDirectory: Self.defaultControlDirectory)
     }
 
-    public init(target: SSHTarget, locator: SSHPassLocator = SSHPassLocator()) throws {
-        guard let path = locator.locate() else { throw RemoteFileError.sshpassNotFound }
-        self.init(target: target, sshpassPath: path, controlDirectory: Self.defaultControlDirectory)
+    public init(target: SSHTarget, sshPath: String, timeout: TimeInterval = 30, controlDirectory: String? = nil,
+                askPassDirectory: String = AskPass.defaultDirectory) {
+        self.target = target
+        self.sshPath = sshPath
+        self.timeout = timeout
+        self.controlDirectory = controlDirectory
+        self.askPassDirectory = askPassDirectory
     }
 
     /// `%C` 是 ssh 自己算的“本机+主机+端口+用户”哈希，换了主机、端口或用户就是另一条连接。
@@ -296,7 +298,7 @@ public struct RemoteFileClient: Sendable {
     /// 关掉目录里所有复用连接（退出应用时）。
     public static func closeAllSharedConnections(in directory: String = defaultControlDirectory) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
-        for name in names {
+        for name in names where name != AskPass.scriptName {
             exitMaster(["-o", "ControlPath=\(directory)/\(name)", "--", "cmdcode"])
         }
     }
@@ -316,18 +318,10 @@ public struct RemoteFileClient: Sendable {
     /// 建目录并只留给自己（0700），别的用户不能借用这些已认证的连接。
     private func prepareControlDirectory() throws {
         guard let controlDirectory else { return }
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        if !fm.fileExists(atPath: controlDirectory, isDirectory: &isDir) {
-            try fm.createDirectory(atPath: controlDirectory, withIntermediateDirectories: true,
-                                   attributes: [.posixPermissions: 0o700])
-        }
-        let attrs = try fm.attributesOfItem(atPath: controlDirectory)
-        guard (attrs[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else {
-            throw RemoteFileError.local("\(controlDirectory) 不属于当前用户，无法复用连接")
-        }
-        if (attrs[.posixPermissions] as? NSNumber)?.intValue != 0o700 {
-            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: controlDirectory)
+        do {
+            try AskPass.prepareDirectory(controlDirectory)
+        } catch {
+            throw RemoteFileError.local("无法复用连接：\(error.localizedDescription)")
         }
     }
 
@@ -404,21 +398,25 @@ public struct RemoteFileClient: Sendable {
         case RemoteFileScript.statusConflict: throw RemoteFileError.conflict(path)
         case RemoteFileScript.statusExists: throw RemoteFileError.alreadyExists(path)
         default:
-            var message = String(decoding: r.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            // sshpass 密码错误时不输出任何内容，只有退出码 5。
-            if message.isEmpty && r.status == 5 { message = "密码错误（sshpass 退出码 5）" }
+            let message = String(decoding: r.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             throw RemoteFileError.remote(status: r.status, message: message)
         }
     }
 
     private func run(_ script: String, options: ProcessOptions = ProcessOptions()) async throws -> ProcessResult {
         try prepareControlDirectory()
+        let askPassPath: String
+        do {
+            askPassPath = try AskPass.prepare(in: askPassDirectory)
+        } catch {
+            throw RemoteFileError.local(error.localizedDescription)
+        }
         let invocation = ScriptBuilder.sshInvocation(
-            target: target, sshpassPath: sshpassPath,
+            target: target, sshPath: sshPath, askPassPath: askPassPath,
             remoteCommand: ScriptBuilder.remoteCommand(script: script, loginShell: false), allocateTTY: false,
             controlPath: controlPath)
         var env = invocation.environment
-        // sshpass 通过 PATH 找 ssh。
+        // askpass 脚本用 /bin/sh 和 printf，给个基本的 PATH。
         env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"
         let canceller = ProcessCanceller()
         var options = options

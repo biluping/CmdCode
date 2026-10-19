@@ -2,12 +2,12 @@ import Foundation
 import Testing
 @testable import CmdCodeCore
 
-/// 远程文件往返测试：假的 sshpass 用本地 bash 执行远端命令（stdin 原样传过去），代替真实服务器。
+/// 远程文件往返测试：假的 ssh 用本地 bash 执行远端命令（stdin 原样传过去），代替真实服务器。
 @Suite("RemoteFiles")
 struct RemoteFilesTests {
 
     private func makeClient(base: String) throws -> RemoteFileClient {
-        let fake = base + "/fake sshpass"
+        let fake = base + "/fake ssh"
         try """
         #!/bin/bash
         export HOME=\(ScriptBuilder.shq(base))
@@ -16,7 +16,8 @@ struct RemoteFilesTests {
 
         """.write(toFile: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake)
-        return RemoteFileClient(target: SSHTarget(host: "h", username: "u", password: "p"), sshpassPath: fake)
+        return RemoteFileClient(target: SSHTarget(host: "h", username: "u", password: "p"), sshPath: fake,
+                                askPassDirectory: base + "/rt")
     }
 
     // MARK: 列目录
@@ -305,18 +306,18 @@ struct RemoteFilesTests {
     @Test("无终端调用用 -T，原有执行仍是 -t")
     func ttyFlag() {
         let t = SSHTarget(host: "h", username: "u", password: "p")
-        #expect(ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", remoteCommand: "c", allocateTTY: false)
-            .arguments.prefix(3) == ["-e", "ssh", "-T"])
-        #expect(ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", command: "c", workingDirectory: nil)
-            .arguments.prefix(3) == ["-e", "ssh", "-t"])
+        #expect(ScriptBuilder.sshInvocation(target: t, askPassPath: "/x", remoteCommand: "c", allocateTTY: false)
+            .arguments.first == "-T")
+        #expect(ScriptBuilder.sshInvocation(target: t, askPassPath: "/x", command: "c", workingDirectory: nil)
+            .arguments.first == "-t")
     }
 
     @Test("连接复用：给了 controlPath 才加 ControlMaster 参数，且在主机之前；文件操作用非登录 shell")
     func connectionReuse() throws {
         let t = SSHTarget(host: "h", username: "u", password: "p")
-        let plain = ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", remoteCommand: "c", allocateTTY: false)
+        let plain = ScriptBuilder.sshInvocation(target: t, askPassPath: "/x", remoteCommand: "c", allocateTTY: false)
         #expect(!plain.arguments.contains { $0.hasPrefix("Control") })
-        let shared = ScriptBuilder.sshInvocation(target: t, sshpassPath: "/x", remoteCommand: "c", allocateTTY: false,
+        let shared = ScriptBuilder.sshInvocation(target: t, askPassPath: "/x", remoteCommand: "c", allocateTTY: false,
                                                   controlPath: "/tmp/d/%C")
         #expect(shared.arguments.contains("ControlMaster=auto"))
         #expect(shared.arguments.contains("ControlPath=/tmp/d/%C"))

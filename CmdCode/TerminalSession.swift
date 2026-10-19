@@ -74,7 +74,7 @@ final class TerminalSession: Identifiable {
         self.delegate = delegate
         view.processDelegate = delegate
         startedAt = Date()
-        // sshpass 通过 PATH 找 ssh；终端默认环境里不带 PATH，这里补上系统路径。
+        // 终端默认环境里不带 PATH，askpass 脚本要用到基本命令，这里补上系统路径。
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin")
         env += launch.environment.map { "\($0.key)=\($0.value)" }

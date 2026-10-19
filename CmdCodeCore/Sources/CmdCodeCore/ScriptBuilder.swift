@@ -23,7 +23,7 @@ public struct SSHTarget: Sendable, Equatable {
 public struct SSHInvocation: Sendable, Equatable {
     public var executable: String
     public var arguments: [String]
-    /// 需要额外设置的环境变量（目前只有 SSHPASS）。
+    /// 需要额外设置的环境变量：askpass 脚本路径和密码（见 `AskPass.environment`）。
     public var environment: [String: String]
 }
 
@@ -101,6 +101,9 @@ public enum ScriptBuilder {
         "bash -\(loginShell ? "l" : "")c \"$(printf %s \(base64(script)) | base64 -d)\""
     }
 
+    /// 系统自带的 ssh。
+    public static let sshPath = "/usr/bin/ssh"
+
     /// 测试连接用的命令。
     public static func testConnectionCommand() -> String {
         "whoami && pwd"
@@ -108,18 +111,20 @@ public enum ScriptBuilder {
 
     /// 启动 ssh 所需的程序、参数和环境变量，直接交给伪终端（pty）运行，不经过 shell。
     ///
-    /// - 密码只放在环境变量 `SSHPASS` 里，不出现在参数中，也不写入任何文件。
+    /// - 密码只放在环境变量里，由 askpass 脚本交给 ssh（见 `AskPass`），不出现在参数中，也不写入任何文件。
+    /// - `NumberOfPasswordPrompts=1`：密码错了只试一次，不连续试 3 次（服务器可能按失败次数锁账号）。
     /// - 用 `-l 用户名` 和 `--` 分隔主机，主机或用户名里的特殊字符都不会被当成选项。
     /// - `-t` 强制分配远端终端，交互程序（vim、top）和 Ctrl-C 都能正常工作。
     public static func sshInvocation(
         target: SSHTarget,
-        sshpassPath: String,
+        sshPath: String = ScriptBuilder.sshPath,
+        askPassPath: String,
         command: String,
         workingDirectory: String?,
         stayInShell: Bool = false
     ) -> SSHInvocation {
         sshInvocation(
-            target: target, sshpassPath: sshpassPath,
+            target: target, sshPath: sshPath, askPassPath: askPassPath,
             remoteCommand: remoteCommand(command: command, workingDirectory: workingDirectory, stayInShell: stayInShell),
             allocateTTY: true)
     }
@@ -131,20 +136,22 @@ public enum ScriptBuilder {
     /// 不再握手和认证；空闲 `controlPersist` 秒后主连接自己退出。
     public static func sshInvocation(
         target: SSHTarget,
-        sshpassPath: String,
+        sshPath: String = ScriptBuilder.sshPath,
+        askPassPath: String,
         remoteCommand: String,
         allocateTTY: Bool,
         controlPath: String? = nil,
         controlPersist: Int = 300
     ) -> SSHInvocation {
         var arguments = [
-            "-e", "ssh", allocateTTY ? "-t" : "-T",
+            allocateTTY ? "-t" : "-T",
             "-p", String(target.port),
             "-o", "ConnectTimeout=10",
             "-o", "ServerAliveInterval=30",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
             "-o", "LogLevel=ERROR",
+            "-o", "NumberOfPasswordPrompts=1",
         ]
         if let controlPath {
             arguments += [
@@ -154,7 +161,7 @@ public enum ScriptBuilder {
             ]
         }
         arguments += ["-l", target.username, "--", target.host, remoteCommand]
-        return SSHInvocation(executable: sshpassPath, arguments: arguments,
-                             environment: ["SSHPASS": target.password])
+        return SSHInvocation(executable: sshPath, arguments: arguments,
+                             environment: AskPass.environment(scriptPath: askPassPath, password: target.password))
     }
 }

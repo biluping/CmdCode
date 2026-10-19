@@ -192,25 +192,27 @@ struct ScriptBuilderTests {
         let passOut = base + "/pass.out"
         let argsOut = base + "/args.out"
 
-        // 假的 sshpass：记录 SSHPASS 和参数，然后用 bash -c 执行最后一个参数（代替远端登录 shell）。
-        let fakeSshpass = base + "/fake sshpass"
+        // 假的 ssh：像真 ssh 一样运行 askpass 拿密码并记录下来，记录参数，
+        // 然后用 bash -c 执行最后一个参数（代替远端登录 shell）。
+        let fakeSSH = base + "/fake ssh"
         try """
         #!/bin/bash
-        printf %s "$SSHPASS" > "$FAKE_PASS_OUT"
+        [ "$SSH_ASKPASS_REQUIRE" = force ] && "$SSH_ASKPASS" "ro'ot@10.0.144.232's password: " > "$FAKE_PASS_OUT"
         printf '%s\\n' "$@" > "$FAKE_ARGS_OUT"
         for last; do :; done
         exec /bin/bash -c "$last"
 
-        """.write(toFile: fakeSshpass, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeSshpass)
+        """.write(toFile: fakeSSH, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeSSH)
+        let askPass = try AskPass.prepare(in: base + "/rt")
 
         let password = #"p@ss'w"o$rd `x` $(y) \ 中文"#
         let target = SSHTarget(host: "10.0.144.232", port: 2222, username: "ro'ot", password: password)
         let command = "pwd\necho \"it's $((6*7))\"\ncat <<'EOF'\n$raw\nEOF"
-        let invocation = ScriptBuilder.sshInvocation(target: target, sshpassPath: fakeSshpass,
+        let invocation = ScriptBuilder.sshInvocation(target: target, sshPath: fakeSSH, askPassPath: askPass,
                                                      command: command, workingDirectory: work)
-        #expect(invocation.executable == fakeSshpass)
-        #expect(invocation.environment == ["SSHPASS": password])
+        #expect(invocation.executable == fakeSSH)
+        #expect(invocation.environment == AskPass.environment(scriptPath: askPass, password: password))
         #expect(!invocation.arguments.contains { $0.contains("p@ss") })
 
         var env = Shell.cleanEnv(home: base)
@@ -222,12 +224,13 @@ struct ScriptBuilderTests {
         let expected = try Shell.run("/bin/bash", ["-c", command], cwd: work, env: Shell.cleanEnv(home: base))
         #expect(r.stdout == expected.stdout)
         #expect(r.status == expected.status)
-        #expect(try String(contentsOfFile: passOut, encoding: .utf8) == password)
+        #expect(try String(contentsOfFile: passOut, encoding: .utf8) == password + "\n")
 
         let args = try String(contentsOfFile: argsOut, encoding: .utf8)
             .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        #expect(Array(args.prefix(5)) == ["-e", "ssh", "-t", "-p", "2222"])
+        #expect(Array(args.prefix(3)) == ["-t", "-p", "2222"])
         #expect(args.contains("StrictHostKeyChecking=no"))
+        #expect(args.contains("NumberOfPasswordPrompts=1"))
         // 用户名和主机是独立参数，主机前有 -- 防止被当成选项
         let l = try #require(args.firstIndex(of: "-l"))
         #expect(Array(args[l...(l + 3)]) == ["-l", "ro'ot", "--", "10.0.144.232"])
@@ -236,7 +239,7 @@ struct ScriptBuilderTests {
     @Test("主机以 - 开头也不会被 ssh 当成选项")
     func hostIsNotParsedAsOption() {
         let inv = ScriptBuilder.sshInvocation(target: SSHTarget(host: "-oProxyCommand=x", username: "u", password: "p"),
-                                              sshpassPath: "/x/sshpass", command: "ls", workingDirectory: nil)
+                                              askPassPath: "/x/askpass", command: "ls", workingDirectory: nil)
         let dash = inv.arguments.firstIndex(of: "--")!
         #expect(inv.arguments[dash + 1] == "-oProxyCommand=x")
     }

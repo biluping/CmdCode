@@ -86,21 +86,14 @@ struct SidebarView: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(model.sshpassMissing ? Color.orange : Theme.success)
-                .frame(width: 7, height: 7)
-            Text(model.sshpassMissing ? "未安装 sshpass" : "sshpass 已就绪")
-                .font(Theme.small)
-                .foregroundStyle(.secondary)
-            Spacer()
             Text("\(servers.count) 台服务器")
                 .font(Theme.small)
                 .foregroundStyle(Theme.faint)
+            Spacer()
         }
         .padding(.horizontal, 18)
         .frame(height: 40)
         .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
-        .help(model.sshpassMissing ? SSHPassLocator.installHint : "")
     }
 }
 

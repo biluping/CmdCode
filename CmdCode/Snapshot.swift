@@ -52,8 +52,8 @@ enum Snapshot {
         guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) else { return }
         window.setContentSize(NSSize(width: 1180, height: 760))
 
-        let (filesDir, fakeSshpass) = makeFileFixture()
-        model.makeFileClient = { RemoteFileClient(target: $0, sshpassPath: fakeSshpass) }
+        let (filesDir, fakeSSH) = makeFileFixture()
+        model.makeFileClient = { RemoteFileClient(target: $0, sshPath: fakeSSH) }
         let scenes: [(String, () -> Void)] = [
             ("01-welcome", { model.selection = nil }),
             ("02-server", {
@@ -169,8 +169,8 @@ enum Snapshot {
         NSApp.terminate(nil)
     }
 
-    /// 远程文件页用的示例：本地临时目录 + 假的 sshpass（用本地 bash 执行远端命令）。
-    private static func makeFileFixture() -> (directory: String, sshpass: String) {
+    /// 远程文件页用的示例：本地临时目录 + 假的 ssh（用本地 bash 执行远端命令）。
+    private static func makeFileFixture() -> (directory: String, ssh: String) {
         let fm = FileManager.default
         let base = (NSTemporaryDirectory() as NSString).appendingPathComponent("cmdcode-snapshot-files")
         try? fm.removeItem(atPath: base)
@@ -207,7 +207,7 @@ enum Snapshot {
         try? fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: dir + "/README.md")
         try? fm.createSymbolicLink(atPath: dir + "/current.log", withDestinationPath: "logs/lims.log")
 
-        let fake = base + "/fake-sshpass"
+        let fake = base + "/fake-ssh"
         try? "#!/bin/bash\nfor last; do :; done\nexec /bin/bash -c \"$last\"\n".write(toFile: fake, atomically: true, encoding: .utf8)
         try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake)
         return (dir, fake)

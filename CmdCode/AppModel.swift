@@ -103,8 +103,8 @@ final class AppModel {
     var pendingTabClose: [WorkspaceTab]?
     /// 主窗口被关闭后重新打开它（由界面注入）。
     @ObservationIgnored var reopenWindow: (() -> Void)?
-    /// 生成远程文件客户端（截图自检时换成本地假的 sshpass）。
-    @ObservationIgnored var makeFileClient: (SSHTarget) throws -> RemoteFileClient = { try RemoteFileClient(target: $0) }
+    /// 生成远程文件客户端（截图自检时换成本地假的 ssh）。
+    @ObservationIgnored var makeFileClient: (SSHTarget) throws -> RemoteFileClient = { RemoteFileClient(target: $0) }
     var alert: AppAlert?
     /// 底部的短暂提示，比如“已复制密码”。
     var toast: String?
@@ -117,14 +117,12 @@ final class AppModel {
     @ObservationIgnored var dragging: DragItem?
     /// 每次拖动放置后加一，左侧栏可拖动的行用它当 id 重建（见 `treeDraggable`）。
     var dropGeneration = 0
-    var sshpassMissing: Bool
     let clipboard: SecretClipboard
 
     init(library: Library, runner: CommandRunner = CommandRunner(), clipboard: SecretClipboard = SecretClipboard()) {
         self.library = library
         self.runner = runner
         self.clipboard = clipboard
-        sshpassMissing = runner.locator.locate() == nil
     }
 
     // MARK: 执行

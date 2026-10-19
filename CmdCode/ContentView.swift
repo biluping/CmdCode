@@ -47,11 +47,6 @@ struct ContentView: View {
             SheetContent(route: route)
                 .environment(model)
         }
-        .alert("未安装 sshpass", isPresented: $model.sshpassMissing) {
-            Button("好") {}
-        } message: {
-            Text(SSHPassLocator.installHint)
-        }
         .alert(model.alert?.title ?? "", isPresented: isPresent($model.alert), presenting: model.alert) { _ in
             Button("好") {}
         } message: { Text($0.message) }

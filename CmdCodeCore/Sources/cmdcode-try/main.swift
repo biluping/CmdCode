@@ -55,7 +55,7 @@ let target = SSHTarget(host: host, port: port, username: user, password: passwor
 // 远程文件操作：不经过终端，直接用 RemoteFileClient。
 if let op = fileOptions.first, let path = options[op] {
     do {
-        let client = try RemoteFileClient(target: target)
+        let client = RemoteFileClient(target: target)
         switch op {
         case "--ls":
             let listing = try await client.list(directory: path)
@@ -98,15 +98,13 @@ let plan = ExecutionPlan(target: target, command: command,
                          requiresConfirmation: false, serverName: host, commandName: isTest ? "测试连接" : "命令")
 
 do {
-    // 在当前终端里直接运行 ssh（继承标准输入输出），效果和应用内终端一致。
+    // 当前进程直接换成 ssh（继承终端和标准输入输出），效果和应用内终端一致。
+    // 不用 Process 起子进程：子进程不在终端的前台进程组，ssh -t 设置终端时会被系统暂停。
     let invocation = try CommandRunner().invocation(for: plan)
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: invocation.executable)
-    process.arguments = invocation.arguments
-    process.environment = ProcessInfo.processInfo.environment.merging(invocation.environment) { $1 }
-    try process.run()
-    process.waitUntilExit()
-    exit(process.terminationStatus)
+    for (key, value) in invocation.environment { setenv(key, value, 1) }
+    let argv = ([invocation.executable] + invocation.arguments).map { strdup($0) } + [nil]
+    execv(invocation.executable, argv)
+    fail("无法启动 \(invocation.executable)：\(String(cString: strerror(errno)))")
 } catch {
     fail((error as? LocalizedError)?.errorDescription ?? "\(error)")
 }
