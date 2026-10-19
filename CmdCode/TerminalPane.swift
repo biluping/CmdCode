@@ -14,7 +14,7 @@ struct TerminalPane: View {
             tabBar
             switch model.activeTab {
             case .terminal(let session):
-                TerminalHost(session: session)
+                TerminalHost(session: session, browseFiles: browseFiles(for: session))
                     .id(session.id)
                     .padding(.leading, 10)
                     .padding(.top, 6)
@@ -36,6 +36,15 @@ struct TerminalPane: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text(tabCloseMessage)
+        }
+    }
+
+    /// 终端右键“浏览文件”：打开这个会话所属服务器的文件标签，跳到终端当前所在的目录。
+    private func browseFiles(for session: TerminalSession) -> (() -> Void)? {
+        guard let id = session.serverID else { return nil }
+        return { [context, model] in
+            guard let server = context.model(for: id) as? Server, !server.isDeleted else { return }
+            model.openFiles(server, directory: session.currentDirectory)
         }
     }
 
@@ -104,11 +113,6 @@ struct TerminalPane: View {
 
     @ViewBuilder
     private func actions(for session: TerminalSession) -> some View {
-        if session.state.isRunning {
-            Button { session.interrupt() } label: { Label("中断", systemImage: "stop.fill") }
-                .buttonStyle(PillButtonStyle())
-                .help("发送 Ctrl-C")
-        }
         if session.plan != nil {
             Button { model.rerun(session) } label: { Label("重新运行", systemImage: "arrow.clockwise") }
                 .buttonStyle(PillButtonStyle())
@@ -312,10 +316,12 @@ private struct StatusBar: View {
 /// 把会话的终端视图放进 SwiftUI。视图本身由会话持有，切换标签时滚动记录和进程都不受影响。
 private struct TerminalHost: NSViewRepresentable {
     let session: TerminalSession
+    let browseFiles: (() -> Void)?
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
         let view = session.view
+        view.onBrowseFiles = browseFiles
         view.removeFromSuperview()
         view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(view)
@@ -329,5 +335,7 @@ private struct TerminalHost: NSViewRepresentable {
         return container
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        session.view.onBrowseFiles = browseFiles
+    }
 }

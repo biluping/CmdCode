@@ -129,12 +129,13 @@ struct ScriptBuilderTests {
     // MARK: 留在 shell / 登录
 
     /// 用一个假的登录 shell 代替远端用户的 shell，打印它在哪个目录、带了什么参数。
-    private func runStayingInShell(command: String, workingDirectory: String?) throws -> (Shell.Result, String) {
+    private func runStayingInShell(command: String, workingDirectory: String?,
+                                   shellScript: String = "echo \"SHELL $PWD $*\"") throws -> (Shell.Result, String) {
         let base = try Shell.makeTempDir()
         let work = base + "/my work"
         try Shell.mkdir(work)
         let fakeShell = base + "/fake-shell"
-        try "#!/bin/bash\necho \"SHELL $PWD $*\"\n".write(toFile: fakeShell, atomically: true, encoding: .utf8)
+        try "#!/bin/bash\n\(shellScript)\n".write(toFile: fakeShell, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeShell)
         var env = Shell.cleanEnv(home: base)
         env["SHELL"] = fakeShell
@@ -157,10 +158,28 @@ struct ScriptBuilderTests {
     }
 
     @Test func innerScriptStayingInShell() {
+        let tail = ScriptBuilder.reportDirectoryLine + "\n" + ScriptBuilder.loginShellLine
         #expect(ScriptBuilder.innerScript(command: "a'b", workingDirectory: nil, stayInShell: true)
-                == "trap : INT\nbash -lc 'a'\\''b'\n" + ScriptBuilder.loginShellLine)
+                == "trap : INT\nbash -lc 'a'\\''b'\n" + tail)
         #expect(ScriptBuilder.innerScript(command: "", workingDirectory: "/d", stayInShell: true)
-                == "cd -- '/d' || exit 1\n" + ScriptBuilder.loginShellLine)
+                == "cd -- '/d' || exit 1\n" + tail)
+    }
+
+    @Test("登录 shell 拿到的 PROMPT_COMMAND 用 OSC 7 上报当前目录，命令本身不受影响")
+    func loginShellReportsDirectory() throws {
+        let (r, work) = try runStayingInShell(command: "echo \"[$PROMPT_COMMAND]\"", workingDirectory: "x",
+                                              shellScript: "cd \"$PWD/../my work\"; eval \"$PROMPT_COMMAND\"")
+        let osc = r.stdout.components(separatedBy: "\u{1b}]7;").last?.components(separatedBy: "\u{07}").first
+        #expect(r.stdout.hasPrefix("[]\n"))
+        #expect(osc.flatMap(ScriptBuilder.reportedDirectory) == work)
+    }
+
+    @Test func reportedDirectory() {
+        #expect(ScriptBuilder.reportedDirectory("file://web01/usr/local/my app") == "/usr/local/my app")
+        #expect(ScriptBuilder.reportedDirectory("file:///root") == "/root")
+        #expect(ScriptBuilder.reportedDirectory("file://h/a%20b/%E4%B8%AD") == "/a b/中")
+        #expect(ScriptBuilder.reportedDirectory("file://h") == nil)
+        #expect(ScriptBuilder.reportedDirectory("/tmp") == nil)
     }
 
     // MARK: ssh 启动参数端到端

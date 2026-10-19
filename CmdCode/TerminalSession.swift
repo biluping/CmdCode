@@ -2,6 +2,7 @@ import AppKit
 import CmdCodeCore
 import Foundation
 import Observation
+import SwiftData
 import SwiftTerm
 
 /// 一次命令执行：一个伪终端里的 ssh 进程，以及显示它的终端视图。
@@ -32,6 +33,10 @@ final class TerminalSession: Identifiable {
     let workingDirectory: String?
     /// 重新运行时使用；预览用的会话没有。
     let plan: ExecutionPlan?
+    /// 所属服务器，终端右键“浏览文件”用；预览用的会话没有。
+    @ObservationIgnored var serverID: PersistentIdentifier?
+    /// 远端 shell 最近一次上报的当前目录（OSC 7，见 `ScriptBuilder.reportDirectoryLine`）。
+    @ObservationIgnored private(set) var currentDirectory: String?
 
     private(set) var state: State = .running
     private(set) var startedAt = Date()
@@ -84,12 +89,6 @@ final class TerminalSession: Identifiable {
         process.terminate()
     }
 
-    /// 发送 Ctrl-C。
-    func interrupt() {
-        guard state.isRunning else { return }
-        view.send([0x03])
-    }
-
     fileprivate func finish(_ newState: State) {
         guard state.isRunning else { return }
         state = newState
@@ -113,7 +112,9 @@ final class TerminalSession: Identifiable {
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
-        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
+            session?.currentDirectory = directory.flatMap(ScriptBuilder.reportedDirectory)
+        }
 
         func processTerminated(source: TerminalView, exitCode: Int32?) {
             session?.finish(.exited(exitCode))
@@ -127,6 +128,8 @@ final class TerminalSession: Identifiable {
 
 /// 外观跟随应用浅色/深色模式的终端视图。
 final class CmdTerminalView: LocalProcessTerminalView {
+    /// 右键菜单的“浏览文件”；为 nil 时不显示这一项。
+    var onBrowseFiles: (() -> Void)?
     override init(frame: CGRect) {
         super.init(frame: frame)
         font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
@@ -146,6 +149,38 @@ final class CmdTerminalView: LocalProcessTerminalView {
         case .blinkBar, .steadyBar: .steadyBar
         }
         super.cursorStyleChanged(source: source, newStyle: steady)
+    }
+
+    /// 右键菜单：复制、粘贴、浏览文件。远端程序开了鼠标上报（如 vim、htop）时右键交给它，不弹菜单。
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        // 不要系统的“服务”子菜单。
+        menu.allowsContextMenuPlugIns = false
+        let copy = menu.addItem(withTitle: "复制", action: #selector(copy(_:)), keyEquivalent: "c")
+        copy.target = self
+        copy.isEnabled = getSelection()?.isEmpty == false
+        menu.addItem(withTitle: "粘贴", action: #selector(paste(_:)), keyEquivalent: "v").target = self
+        if onBrowseFiles != nil {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "浏览文件", action: #selector(browseFiles), keyEquivalent: "").target = self
+        }
+        menu.items.forEach { $0.tag = Self.ownMenuItemTag }
+        return menu
+    }
+
+    private static let ownMenuItemTag = 0x434D44
+
+    /// 终端视图实现了文字输入协议，系统会往右键菜单里加“自动填充”等项，弹出前把不是自己加的都去掉。
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        for item in menu.items.reversed() where item.tag != Self.ownMenuItemTag {
+            menu.removeItem(item)
+        }
+    }
+
+    @objc private func browseFiles() {
+        onBrowseFiles?()
     }
 
     required init?(coder: NSCoder) {

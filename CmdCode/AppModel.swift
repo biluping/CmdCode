@@ -94,6 +94,8 @@ final class AppModel {
     var pendingExecution: ExecutionPlan?
     /// 确认后要替换掉的会话（“重新运行”时）。
     @ObservationIgnored private var pendingReplacement: TerminalSession.ID?
+    /// 等待确认的执行属于哪台服务器（终端右键“浏览文件”用）。
+    @ObservationIgnored private var pendingServerID: PersistentIdentifier?
     /// 右侧的标签，按打开顺序。
     var tabs: [WorkspaceTab] = []
     var activeTabID: UUID?
@@ -128,39 +130,43 @@ final class AppModel {
     // MARK: 执行
 
     func run(_ command: ServerCommand) {
-        perform { try prepare(command.executionPlan()) }
+        perform { try prepare(command.executionPlan(), serverID: command.server?.persistentModelID) }
     }
 
     func testConnection(_ server: Server) {
-        perform { try prepare(server.testConnectionPlan()) }
+        perform { try prepare(server.testConnectionPlan(), serverID: server.persistentModelID) }
     }
 
     /// 登录服务器：在内嵌终端里打开一个交互 shell。
     func login(_ server: Server) {
-        perform { try prepare(server.loginPlan()) }
+        perform { try prepare(server.loginPlan(), serverID: server.persistentModelID) }
     }
 
-    private func prepare(_ plan: ExecutionPlan, replacing: TerminalSession.ID? = nil) {
+    private func prepare(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, replacing: TerminalSession.ID? = nil) {
         if plan.requiresConfirmation {
             pendingReplacement = replacing
+            pendingServerID = serverID
             pendingExecution = plan
         } else {
-            execute(plan, replacing: replacing)
+            execute(plan, serverID: serverID, replacing: replacing)
         }
     }
 
     /// 确认框点了“执行”。
     func confirmExecution(_ plan: ExecutionPlan) {
         let replacing = pendingReplacement
+        let serverID = pendingServerID
         pendingReplacement = nil
-        execute(plan, replacing: replacing)
+        pendingServerID = nil
+        execute(plan, serverID: serverID, replacing: replacing)
     }
 
     /// 在内嵌终端里新开一个标签执行；`replacing` 指定时原位替换那个标签（重新运行）。
-    private func execute(_ plan: ExecutionPlan, replacing: TerminalSession.ID? = nil) {
+    private func execute(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, replacing: TerminalSession.ID? = nil) {
         pendingExecution = nil
         perform {
             let session = TerminalSession(plan: plan, invocation: try runner.invocation(for: plan))
+            session.serverID = serverID
             open(session, replacing: replacing)
         }
     }
@@ -186,18 +192,20 @@ final class AppModel {
     }
 
     /// 打开服务器的文件标签；每台服务器一个，已经打开的切过去，目录和编辑内容都保留。
-    func openFiles(_ server: Server) {
+    /// 给了 `directory`（终端右键“浏览文件”）时跳到这个目录，打开中的文件不受影响。
+    func openFiles(_ server: Server, directory: String? = nil) {
         perform {
             let client = try makeFileClient(server.sshTarget())
             if let browser = fileBrowser(for: server) {
                 browser.client = client
                 browser.isProduction = server.isProduction
+                if let directory { browser.go(to: directory) }
                 activeTabID = browser.id
             } else {
                 let browser = FileBrowserModel(
                     client: client, serverID: server.persistentModelID, serverName: server.name,
                     isProduction: server.isProduction,
-                    initialDirectory: ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
+                    initialDirectory: directory ?? ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
                 browser.notify = { [weak self] in self?.showToast($0) }
                 tabs.append(.files(browser))
                 activeTabID = browser.id
@@ -288,7 +296,7 @@ final class AppModel {
     /// 重新运行：生产环境照常先确认，确认后在原标签里重新开始。
     func rerun(_ session: TerminalSession) {
         guard let plan = session.plan else { return }
-        prepare(plan, replacing: session.id)
+        prepare(plan, serverID: session.serverID, replacing: session.id)
     }
 
 

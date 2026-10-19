@@ -43,6 +43,21 @@ public enum ScriptBuilder {
     /// 留在 shell 时最后执行的一行：换成远端用户的登录 shell，继续交互。
     public static let loginShellLine = #"exec "${SHELL:-bash}" -l"#
 
+    /// 进入登录 shell 前导出的 PROMPT_COMMAND：bash 每次显示提示符时用 OSC 7 上报当前目录，
+    /// 终端右键“浏览文件”据此打开同一目录。远端 rc 覆盖了 PROMPT_COMMAND 或登录 shell 不是 bash 时收不到，
+    /// 浏览文件退回服务器配置的工作目录。
+    public static let reportDirectoryLine = #"export PROMPT_COMMAND='printf "\033]7;file://%s%s\007" "$HOSTNAME" "$PWD"'"#
+
+    /// 从 OSC 7 上报的 `file://主机/路径` 里取出路径；不是这个格式时返回 nil。
+    /// 路径按原样上报（我们自己的 PROMPT_COMMAND 不做百分号编码），别的程序编码过的也能解开。
+    public static func reportedDirectory(_ url: String) -> String? {
+        guard url.hasPrefix("file://") else { return nil }
+        let rest = url.dropFirst("file://".count)
+        guard let slash = rest.firstIndex(of: "/") else { return nil }
+        let path = String(rest[slash...])
+        return path.removingPercentEncoding ?? path
+    }
+
     /// 内层脚本：有工作目录时第一行是 `cd -- <dir> || exit 1`，之后是原样的命令内容。
     ///
     /// 用单独一行的 `|| exit 1` 而不是 `cd … && 命令`，保证多行命令在 cd 失败时一行都不执行。
@@ -62,6 +77,7 @@ public enum ScriptBuilder {
                 lines.append("trap : INT")
                 lines.append("bash -lc \(shq(command))")
             }
+            lines.append(reportDirectoryLine)
             lines.append(loginShellLine)
         }
         return lines.joined(separator: "\n")
