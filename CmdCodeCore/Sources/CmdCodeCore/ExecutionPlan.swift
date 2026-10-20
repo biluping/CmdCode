@@ -46,11 +46,13 @@ extension Server {
     }
 
     /// 登录服务器：有工作目录就先 cd，然后进入交互 shell。不需要确认。
-    public func loginPlan() throws -> ExecutionPlan {
+    /// 给了 `directory`（从文件标签新开终端）时 cd 到它，代替服务器的工作目录。
+    public func loginPlan(directory: String? = nil) throws -> ExecutionPlan {
         ExecutionPlan(
             target: try sshTarget(),
             command: "",
-            workingDirectory: ScriptBuilder.normalizedWorkingDirectory(workingDirectory),
+            workingDirectory: ScriptBuilder.normalizedWorkingDirectory(directory)
+                ?? ScriptBuilder.normalizedWorkingDirectory(workingDirectory),
             requiresConfirmation: false,
             serverName: name, commandName: "登录", isProduction: isProduction, stayInShell: true)
     }

@@ -135,9 +135,24 @@ final class AppModel {
         perform { try prepare(server.testConnectionPlan(), serverID: server.persistentModelID) }
     }
 
-    /// 登录服务器：在内嵌终端里打开一个交互 shell。
-    func login(_ server: Server) {
-        perform { try prepare(server.loginPlan(), serverID: server.persistentModelID) }
+    /// 登录服务器：在内嵌终端里打开一个交互 shell。给了 `directory` 时登录到这个目录。
+    func login(_ server: Server, directory: String? = nil) {
+        perform { try prepare(server.loginPlan(directory: directory), serverID: server.persistentModelID) }
+    }
+
+    /// 这台服务器还在运行的终端标签里最后打开的那个（文件标签“切到终端”用）。
+    func terminal(for server: Server) -> TerminalSession? {
+        sessions.last { $0.serverID == server.persistentModelID && $0.state.isRunning }
+    }
+
+    /// 文件标签的终端按钮：有运行中的终端就切过去（不往里输入任何东西），没有就新开一个登录到 `directory`。
+    func openTerminal(_ server: Server, directory: String?) {
+        if let session = terminal(for: server) {
+            activeTabID = session.id
+            selection = .tabs
+        } else {
+            login(server, directory: directory)
+        }
     }
 
     private func prepare(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, replacing: TerminalSession.ID? = nil) {

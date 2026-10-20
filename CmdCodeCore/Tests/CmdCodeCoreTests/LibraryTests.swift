@@ -326,6 +326,8 @@ struct LibraryTests {
         let login = try dev.loginPlan()
         #expect(login.command == "" && login.stayInShell && !login.requiresConfirmation)
         #expect(login.workingDirectory == "/usr/local/app/lims")
+        #expect(try dev.loginPlan(directory: "/var/log").workingDirectory == "/var/log")
+        #expect(try dev.loginPlan(directory: " ").workingDirectory == "/usr/local/app/lims")
         #expect(try log.executionPlan().isProduction)
         #expect(try log.executionPlan().title == "135 / 看日志")
 

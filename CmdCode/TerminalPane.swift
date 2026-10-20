@@ -126,15 +126,21 @@ struct TerminalPane: View {
             Button { model.showServer(server) } label: { Image(systemName: "server.rack") }
                 .buttonStyle(IconButtonStyle())
                 .help("服务器详情")
-            Button { model.login(server) } label: { Image(systemName: "terminal") }
+            Button { model.openTerminal(server, directory: browser.listing?.path) } label: { Image(systemName: "terminal") }
                 .buttonStyle(IconButtonStyle())
-                .help("登录服务器（新开终端标签）")
+                .help(model.terminal(for: server) == nil ? "登录服务器（新开终端标签）" : "切到这台服务器的终端标签")
+            moreMenu(closing: .files(browser)) {
+                Button("新开终端登录") { model.login(server, directory: browser.listing?.path) }
+                Divider()
+            }
+        } else {
+            moreMenu(closing: .files(browser))
         }
-        moreMenu(closing: .files(browser))
     }
 
-    private func moreMenu(closing tab: WorkspaceTab) -> some View {
+    private func moreMenu(closing tab: WorkspaceTab, @ViewBuilder extra: () -> some View = { EmptyView() }) -> some View {
         Menu {
+            extra()
             Button("关闭当前标签") { model.close(tab) }
             Button("关闭已结束的终端") { model.closeFinished() }
                 .disabled(!model.sessions.contains { !$0.state.isRunning })
