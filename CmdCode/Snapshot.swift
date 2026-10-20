@@ -127,7 +127,9 @@ enum Snapshot {
                                            script: "for i in 1 2 3; do echo \"$(date +%T) INFO  request handled in ${i}2ms\"; done; sleep 600"))
                     model.open(demoSession("重启服务", server: "232 - lims 主服务", production: false,
                                            script: "echo 'Job for lims.service failed.'; exit 3"))
-                    model.open(demoSession("构建", server: "232 - lims 主服务", production: false, script: buildLog))
+                    let build = demoSession("构建", server: "232 - lims 主服务", production: false, script: buildLog)
+                    build.serverID = seed.lims232.persistentModelID  // 显示“浏览文件”按钮
+                    model.open(build)
                 }
                 model.selection = .tabs
             }),

@@ -117,6 +117,11 @@ struct TerminalPane: View {
             Button { model.rerun(session) } label: { Label("重新运行", systemImage: "arrow.clockwise") }
                 .buttonStyle(PillButtonStyle())
         }
+        if let browse = browseFiles(for: session) {
+            Button(action: browse) { Label("浏览文件", systemImage: "folder") }
+                .buttonStyle(PillButtonStyle())
+                .help("打开这台服务器的文件标签，跳到终端当前所在的目录")
+        }
         moreMenu(closing: .terminal(session))
     }
 
