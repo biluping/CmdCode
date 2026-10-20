@@ -261,6 +261,28 @@ final class FileBrowserModel: Identifiable {
         if pending.exists || isProduction { pendingUpload = pending } else { upload(pending) }
     }
 
+    /// 从 Finder 拖进目录列表的文件：一次只传一个、不传目录，其余和“上传”按钮一样。
+    @discardableResult
+    func requestDroppedUpload(_ urls: [URL]) -> Bool {
+        guard listing != nil else { return false }
+        let files = urls.filter(\.isFileURL)
+        guard files.count == 1, let source = files.first else {
+            transferError = ("不能上传", files.isEmpty ? "只能拖入本地文件。" : "一次只能上传一个文件。")
+            return false
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            transferError = ("不能上传", "\(source.lastPathComponent) 是目录，不支持上传目录。")
+            return false
+        }
+        guard transfer == nil else {
+            transferError = ("不能上传", "正在传输 \(transfer?.name ?? "")，等它结束后再上传。")
+            return false
+        }
+        requestUpload(source)
+        return true
+    }
+
     func upload(_ pending: PendingUpload) {
         pendingUpload = nil
         guard transfer == nil else { return }

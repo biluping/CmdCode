@@ -111,16 +111,23 @@ struct TerminalPane: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
 
+    /// 终端标签右上角：重新运行（登录的叫重新登录）、服务器详情、浏览文件，和文件标签一样都用图标。
     @ViewBuilder
     private func actions(for session: TerminalSession) -> some View {
-        if session.plan != nil {
-            Button { model.rerun(session) } label: { Label("重新运行", systemImage: "arrow.clockwise") }
-                .buttonStyle(PillButtonStyle())
+        if let plan = session.plan {
+            Button { model.rerun(session) } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(IconButtonStyle())
+                .help(plan.command.isEmpty ? "重新登录" : "重新运行")
+        }
+        if let id = session.serverID, let server = context.model(for: id) as? Server, !server.isDeleted {
+            Button { model.showServer(server) } label: { Image(systemName: "server.rack") }
+                .buttonStyle(IconButtonStyle())
+                .help("服务器详情")
         }
         if let browse = browseFiles(for: session) {
-            Button(action: browse) { Label("浏览文件", systemImage: "folder") }
-                .buttonStyle(PillButtonStyle())
-                .help("打开这台服务器的文件标签，跳到终端当前所在的目录")
+            Button(action: browse) { Image(systemName: "folder") }
+                .buttonStyle(IconButtonStyle())
+                .help("浏览文件（跳到终端当前所在的目录）")
         }
         moreMenu(closing: .terminal(session))
     }

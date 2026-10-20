@@ -111,6 +111,8 @@ struct FileBrowserView: View {
 
 private struct DirectoryList: View {
     let browser: FileBrowserModel
+    /// 正有文件拖到列表上方。
+    @State private var isDropTargeted = false
 
     @ViewBuilder private func menu(for entry: RemoteFileEntry, in directory: String) -> some View {
         let path = RemoteFileScript.join(directory, entry.name)
@@ -169,6 +171,26 @@ private struct DirectoryList: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        // 从 Finder 拖文件进来上传到当前目录。
+        .dropDestination(for: URL.self) { urls, _ in
+            browser.requestDroppedUpload(urls)
+        } isTargeted: { isDropTargeted = $0 && browser.listing != nil }
+        .overlay { if isDropTargeted { dropHint } }
+    }
+
+    private var dropHint: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                Label("松开上传到当前目录", systemImage: "arrow.up.doc")
+                    .font(Theme.bodyMedium)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(4)
+            .allowsHitTesting(false)
     }
 }
 
