@@ -106,7 +106,9 @@ struct SearchPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.borderStrong))
         .shadow(color: .black.opacity(0.18), radius: 30, y: 12)
-        .onAppear { fieldFocused = true }
+        // 刚出现时输入框可能还没进窗口（终端等 AppKit 视图仍占着焦点），放到下一轮再聚焦。
+        .onAppear { focusField() }
+        .onChange(of: model.searchFocusRequest) { focusField() }
         .onChange(of: query) { selectedIndex = 0 }
         .onKeyPress(.escape) {
             close()
@@ -237,6 +239,10 @@ struct SearchPanel: View {
         case .action(.newGroup): model.sheet = .newGroup
         case .action(.newCredential): model.sheet = .newCredential
         }
+    }
+
+    private func focusField() {
+        DispatchQueue.main.async { fieldFocused = true }
     }
 
     private func close() {

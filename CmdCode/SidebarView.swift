@@ -21,7 +21,7 @@ struct SidebarView: View {
                 SidebarItem(icon: "magnifyingglass", title: "搜索") {
                     KeyCap(text: "⌘K")
                 } action: {
-                    model.isSearching = true
+                    model.openSearch()
                 }
 
                 SidebarItem(icon: "key", title: "密码管理", selected: model.selection == .credentials) {

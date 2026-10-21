@@ -89,6 +89,8 @@ final class AppModel {
     /// ⌘K 搜索浮层是否显示。
     var isSearching = false
     var searchQuery = ""
+    /// 每次按 ⌘K 加一，浮层据此把焦点放回输入框（浮层已打开时也生效）。
+    private(set) var searchFocusRequest = 0
     var pendingDeletion: PendingDeletion?
     /// 等待确认的执行。
     var pendingExecution: ExecutionPlan?
@@ -363,6 +365,12 @@ final class AppModel {
 
     func copyPassword(_ c: Credential) {
         clipboard.copy(c.password)
+    }
+
+    /// 打开 ⌘K 搜索浮层并聚焦输入框。
+    func openSearch() {
+        isSearching = true
+        searchFocusRequest += 1
     }
 
     /// 选中服务器，并在左侧栏展开到它所在的位置。

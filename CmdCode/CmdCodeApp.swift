@@ -56,7 +56,7 @@ struct CmdCodeApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("新建服务器") { model.sheet = .newServer(group: nil) }
                     .keyboardShortcut("n")
-                Button("搜索") { model.isSearching = true }
+                Button("搜索") { model.openSearch() }
                     .keyboardShortcut("k")
             }
             CommandGroup(before: .windowArrangement) {
