@@ -32,7 +32,9 @@ struct TerminalPane: View {
             }
         }
         .alert(tabCloseTitle, isPresented: isPresent($model.pendingTabClose)) {
+            // 回车确认关闭，Esc 取消（破坏性按钮默认不响应回车，要显式指定）。
             Button("关闭", role: .destructive) { model.confirmTabClose() }
+                .keyboardShortcut(.defaultAction)
             Button("取消", role: .cancel) {}
         } message: {
             Text(tabCloseMessage)
