@@ -59,6 +59,11 @@ struct CmdCodeApp: App {
                 Button("搜索") { model.openSearch() }
                     .keyboardShortcut("k")
             }
+            // 替换系统的“关闭”（⌘W 关窗口即退出应用），改为关闭当前标签。
+            CommandGroup(replacing: .saveItem) {
+                Button("关闭标签") { model.closeActiveTab() }
+                    .keyboardShortcut("w")
+            }
             CommandGroup(before: .windowArrangement) {
                 Button("上一个标签") { model.selectAdjacentTab(-1) }
                     .keyboardShortcut("[", modifiers: [.command, .shift])

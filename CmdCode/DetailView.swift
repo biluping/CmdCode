@@ -91,10 +91,6 @@ struct ServerDetailView: View {
 
     var body: some View {
         Page(headerTitle: [server.group?.name ?? Library.ungroupedTitle, server.name].joined(separator: " / ")) {
-            Button { model.testConnection(server) } label: {
-                Label("测试连接", systemImage: "bolt")
-            }
-            .buttonStyle(PillButtonStyle())
             Button { model.login(server) } label: {
                 Label("登录服务器", systemImage: "terminal")
             }

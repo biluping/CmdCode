@@ -23,7 +23,7 @@ tool/package.sh [--install]
 build/DerivedData/Build/Products/Debug/CmdCode.app/Contents/MacOS/CmdCode -snapshot /tmp/shots
 
 # 开发工具（在 CmdCodeCore 下）
-swift run cmdcode-try --host <主机> --user <用户> [--dir <目录>] (--cmd <命令> | --test)   # 不经界面直接试一次 ssh 执行
+swift run cmdcode-try --host <主机> --user <用户> [--dir <目录>] --cmd <命令>              # 不经界面直接试一次 ssh 执行
 swift run cmdcode-try --host <主机> --user <用户> [--port 22] (--ls <目录> | --cat <文件> | --put <文件>)              # 试远程文件读写（--put 读标准输入）
 swift run cmdcode-try --host <主机> --user <用户> [--port 22] (--download <远程> | --upload <本地>) --to <路径> [--force]  # 试上传下载
 swift run cmdcode-import --dry-run                                                       # 从 FinalShell 导入服务器（正式导入前先退出 CmdCode）
@@ -41,7 +41,7 @@ swift run cmdcode-import --dry-run                                              
 - `Library.swift`：**所有数据修改的唯一入口**（增删改、拖动排序、复制、搜索、左侧栏分组组装 `SidebarSection.make`）。删除规则在这里实现：被引用的凭据不能删（`LibraryError.credentialInUse`）、删服务器级联删命令、删分组把服务器移到“未分组”（`group == nil`，固定排最后）。排序靠模型上的顺序字段，`Library.reorder` 统一重编号。
 - `Drafts.swift`：表单用的值类型草稿（`ServerDraft`、`CommandDraft`、`CredentialDraft`），校验后由 `Library` 写入模型。
 - 执行链路：`ServerCommand.executionPlan()` / `Server.testConnectionPlan()` / `Server.loginPlan()` → `ExecutionPlan`（不持有模型对象、`Sendable`）→ `CommandRunner.invocation(for:)` → `ScriptBuilder.sshInvocation` 产出 `SSHInvocation`（可执行文件路径、参数数组、环境变量）。
-- `ScriptBuilder.swift`：转义的核心。内层脚本 = 可选的 `cd -- <shq(目录)> || exit 1` + 命令原文（留在 shell 时再加 `trap : INT`、`bash -lc`、`exec "${SHELL:-bash}" -l`；命令和登录都留在 shell，只有测试连接不留），整体 base64 后拼成 `bash -lc "$(printf %s <b64> | base64 -d)"` 作为 ssh 最后一个参数。密码只走环境变量 `CMDCODE_SSH_PASSWORD`，由 `AskPass` 的脚本（`/tmp/cmdcode-<uid>/askpass`，脚本本身不含密码）交给 ssh，不进参数、不落盘；`NumberOfPasswordPrompts=1`，密码错只试一次。不要改成 `cd && 命令` 或经 stdin 喂脚本——原因见需求文档 3.4。
+- `ScriptBuilder.swift`：转义的核心。内层脚本 = 可选的 `cd -- <shq(目录)> || exit 1` + 命令原文（留在 shell 时再加 `trap : INT`、`bash -lc`、`exec "${SHELL:-bash}" -l`；命令和登录都留在 shell），整体 base64 后拼成 `bash -lc "$(printf %s <b64> | base64 -d)"` 作为 ssh 最后一个参数。密码只走环境变量 `CMDCODE_SSH_PASSWORD`，由 `AskPass` 的脚本（`/tmp/cmdcode-<uid>/askpass`，脚本本身不含密码）交给 ssh，不进参数、不落盘；`NumberOfPasswordPrompts=1`，密码错只试一次。不要改成 `cd && 命令` 或经 stdin 喂脚本——原因见需求文档 3.4。
 - `ScriptBuilderTests` 是往返测试：用本地 `bash -c` 代替 ssh，对比执行结果与直接执行原命令是否一致（`Tests/.../Shell.swift` 是辅助）。改 `ScriptBuilder` 必须保证这些用例全过，新增转义场景时加用例。
 - `RemoteFiles.swift`：远程文件的列目录、读、写（需求文档 3.5）。同样经 `ScriptBuilder.remoteCommand(script:)` 发脚本，但用 `ssh -T`（不分配终端），写入内容走 stdin，远端 `cat` 覆盖原文件以保留权限和 inode，保存时比对 `cksum` 防冲突。上传下载走同样的通道，流式读写本地文件（不进内存），支持进度和取消。文件操作用非登录 shell，并开启 ssh 连接复用（ControlMaster，socket 在 `/tmp/cmdcode-<uid>/`，关文件标签和退出应用时 `ssh -O exit`）。测试用假的 ssh 在本地 bash 上往返（它不认 ssh 参数，测不到连接复用；本机是 BSD `stat`，列目录的 GNU 分支只能在真实 Linux 服务器上验证）。
 - `AskPass.swift`：askpass 脚本的生成与校验（目录必须属于当前用户、0700）和 ssh 所需环境变量。

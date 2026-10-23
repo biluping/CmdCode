@@ -101,7 +101,7 @@ final class AppModel {
     /// 右侧的标签，按打开顺序。
     var tabs: [WorkspaceTab] = []
     var activeTabID: UUID?
-    /// 等待确认关闭的标签：关闭单个、关闭其他、关闭已结束的终端都先确认。
+    /// 等待确认关闭的标签：关闭单个、关闭其他、关闭全部、关闭已结束的终端都先确认。
     var pendingTabClose: [WorkspaceTab]?
     /// 主窗口被关闭后重新打开它（由界面注入）。
     @ObservationIgnored var reopenWindow: (() -> Void)?
@@ -131,10 +131,6 @@ final class AppModel {
 
     func run(_ command: ServerCommand) {
         perform { try prepare(command.executionPlan(), serverID: command.server?.persistentModelID) }
-    }
-
-    func testConnection(_ server: Server) {
-        perform { try prepare(server.testConnectionPlan(), serverID: server.persistentModelID) }
     }
 
     /// 登录服务器：在内嵌终端里打开一个交互 shell。给了 `directory` 时登录到这个目录。
@@ -257,6 +253,21 @@ final class AppModel {
     /// 关闭其他标签：先确认。
     func closeOthers(than tab: WorkspaceTab) {
         requestClose(tabs.filter { $0.id != tab.id })
+    }
+
+    /// ⌘W：右侧显示标签页时关闭当前标签（先确认），⌘K 浮层打开时关闭浮层，其他情况不做事——不关窗口。
+    func closeActiveTab() {
+        if isSearching {
+            isSearching = false
+            searchQuery = ""
+        } else if selection == .tabs, let tab = activeTab {
+            close(tab)
+        }
+    }
+
+    /// 关闭全部标签：先确认。
+    func closeAll() {
+        requestClose(tabs)
     }
 
     /// 关闭所有已结束的终端：先确认。

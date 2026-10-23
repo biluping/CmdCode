@@ -76,8 +76,8 @@ struct LibraryTests {
         draft.password = "new"
         try lib.updateCredential(c, with: draft)
 
-        #expect(try a.testConnectionPlan().target.password == "new")
-        #expect(try b.testConnectionPlan().target.password == "new")
+        #expect(try a.loginPlan().target.password == "new")
+        #expect(try b.loginPlan().target.password == "new")
     }
 
     @Test("被引用的凭据删不掉，并列出服务器")
@@ -330,11 +330,6 @@ struct LibraryTests {
         #expect(try dev.loginPlan(directory: " ").workingDirectory == "/usr/local/app/lims")
         #expect(try log.executionPlan().isProduction)
         #expect(try log.executionPlan().title == "135 / 看日志")
-
-        let test = try dev.testConnectionPlan()
-        #expect(test.command == "whoami && pwd")
-        #expect(test.workingDirectory == "/usr/local/app/lims")
-        #expect(!test.requiresConfirmation)
     }
 
     // MARK: 搜索

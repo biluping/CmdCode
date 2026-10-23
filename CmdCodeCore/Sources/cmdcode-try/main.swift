@@ -5,7 +5,7 @@ let usage = """
 在当前终端里通过 ssh 执行一条命令（开发调试用）。
 
 用法：
-  swift run cmdcode-try --host <主机> --user <用户名> [--port 22] [--dir <工作目录>] (--cmd <命令> | --test)
+  swift run cmdcode-try --host <主机> --user <用户名> [--port 22] [--dir <工作目录>] --cmd <命令>
   swift run cmdcode-try --host <主机> --user <用户名> [--port 22] (--ls <目录> | --cat <文件> | --put <文件>)
   swift run cmdcode-try --host <主机> --user <用户名> [--port 22] (--download <远程文件> | --upload <本地文件>) --to <路径> [--force]
 
@@ -22,11 +22,9 @@ func fail(_ message: String) -> Never {
 }
 
 var options: [String: String] = [:]
-var isTest = false
 var args = CommandLine.arguments.dropFirst()
 while let arg = args.popFirst() {
     switch arg {
-    case "--test": isTest = true
     case "--force": options["--force"] = "1"
     case "--host", "--user", "--port", "--dir", "--cmd", "--ls", "--cat", "--put", "--download", "--upload", "--to":
         guard let value = args.popFirst() else { fail("\(arg) 缺少值\n\n\(usage)") }
@@ -38,7 +36,7 @@ while let arg = args.popFirst() {
 
 guard let host = options["--host"], let user = options["--user"] else { fail(usage) }
 let fileOptions = ["--ls", "--cat", "--put", "--download", "--upload"].filter { options[$0] != nil }
-guard isTest || options["--cmd"] != nil || !fileOptions.isEmpty else { fail(usage) }
+guard options["--cmd"] != nil || !fileOptions.isEmpty else { fail(usage) }
 guard let port = Int(options["--port"] ?? "22") else { fail("端口必须是数字") }
 
 let password: String
@@ -92,10 +90,10 @@ if let op = fileOptions.first, let path = options[op] {
         fail((error as? LocalizedError)?.errorDescription ?? "\(error)")
     }
 }
-let command = isTest ? ScriptBuilder.testConnectionCommand() : options["--cmd"]!.replacingOccurrences(of: "\\n", with: "\n")
+let command = options["--cmd"]!.replacingOccurrences(of: "\\n", with: "\n")
 let plan = ExecutionPlan(target: target, command: command,
                          workingDirectory: ScriptBuilder.normalizedWorkingDirectory(options["--dir"]),
-                         requiresConfirmation: false, serverName: host, commandName: isTest ? "测试连接" : "命令")
+                         requiresConfirmation: false, serverName: host, commandName: "命令")
 
 do {
     // 当前进程直接换成 ssh（继承终端和标准输入输出），效果和应用内终端一致。

@@ -3,7 +3,7 @@ import SwiftData
 import SwiftUI
 
 /// ⌘K 命令面板：按服务器名、IP、命令名、命令内容搜索；没输入时显示常用操作。
-/// ↑↓ 选择，回车：命令直接执行（确认规则照常），服务器在右侧显示详情；Esc 关闭。
+/// ↑↓ 选择，回车：命令直接执行（确认规则照常），服务器直接登录（新开终端标签）；Esc 关闭。
 struct SearchPanel: View {
     @Environment(AppModel.self) private var model
     @State private var selectedIndex = 0
@@ -232,7 +232,7 @@ struct SearchPanel: View {
         let item = items[selectedIndex]
         close()
         switch item {
-        case .server(let s): model.showServer(s)
+        case .server(let s): model.login(s)
         case .command(let c): model.run(c)
         case .action(.newServer): model.sheet = .newServer(group: nil)
         case .action(.credentials): model.selection = .credentials

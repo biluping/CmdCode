@@ -441,13 +441,8 @@ private struct ServerRows: View {
                 Text("生产").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.danger)
             }
         } onToggle: { toggle() }
-        .onTapGesture {
-            // 第一次点击选中并展开；已选中时再点切换展开。
-            if isSelected { toggle() } else {
-                model.selection = .server(id)
-                model.expandedServers.insert(id)
-            }
-        }
+        // 点击只展开/收起；服务器详情从右键菜单“详情”进入。
+        .onTapGesture { toggle() }
         .contextMenu { serverMenu }
         .treeDraggable(model, title: server.name, icon: "server.rack") { .server(server) }
         .onDrop(of: [.text], delegate: TreeDropDelegate(model: model, spot: spot, indicator: $dropSpot) { item, spot in
@@ -483,10 +478,11 @@ private struct ServerRows: View {
 
     @ViewBuilder
     private var serverMenu: some View {
+        Button("详情") { model.selection = .server(id) }
+        Divider()
         Button("新建命令") { model.sheet = .newCommand(server) }
         Button("登录服务器") { model.login(server) }
         Button("浏览文件") { model.openFiles(server) }
-        Button("测试连接") { model.testConnection(server) }
         Divider()
         Button("编辑") { model.sheet = .editServer(server) }
         Button("复制") { model.duplicate(server) }

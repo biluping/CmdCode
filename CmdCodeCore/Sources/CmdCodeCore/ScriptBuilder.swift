@@ -104,11 +104,6 @@ public enum ScriptBuilder {
     /// 系统自带的 ssh。
     public static let sshPath = "/usr/bin/ssh"
 
-    /// 测试连接用的命令。
-    public static func testConnectionCommand() -> String {
-        "whoami && pwd"
-    }
-
     /// 启动 ssh 所需的程序、参数和环境变量，直接交给伪终端（pty）运行，不经过 shell。
     ///
     /// - 密码只放在环境变量里，由 askpass 脚本交给 ssh（见 `AskPass`），不出现在参数中，也不写入任何文件。

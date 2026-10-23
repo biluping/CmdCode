@@ -111,18 +111,13 @@ struct TerminalPane: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
 
-    /// 终端标签右上角：重新运行（登录的叫重新登录）、服务器详情、浏览文件，和文件标签一样都用图标。
+    /// 终端标签右上角：命令终端有重新运行，登录终端没有；都有浏览文件。和文件标签一样都用图标。
     @ViewBuilder
     private func actions(for session: TerminalSession) -> some View {
-        if let plan = session.plan {
+        if let plan = session.plan, !plan.command.isEmpty {
             Button { model.rerun(session) } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(IconButtonStyle())
-                .help(plan.command.isEmpty ? "重新登录" : "重新运行")
-        }
-        if let id = session.serverID, let server = context.model(for: id) as? Server, !server.isDeleted {
-            Button { model.showServer(server) } label: { Image(systemName: "server.rack") }
-                .buttonStyle(IconButtonStyle())
-                .help("服务器详情")
+                .help("重新运行")
         }
         if let browse = browseFiles(for: session) {
             Button(action: browse) { Image(systemName: "folder") }
@@ -135,9 +130,6 @@ struct TerminalPane: View {
     @ViewBuilder
     private func actions(for browser: FileBrowserModel) -> some View {
         if let server = server(for: browser) {
-            Button { model.showServer(server) } label: { Image(systemName: "server.rack") }
-                .buttonStyle(IconButtonStyle())
-                .help("服务器详情")
             Button { model.openTerminal(server, directory: browser.listing?.path) } label: { Image(systemName: "terminal") }
                 .buttonStyle(IconButtonStyle())
                 .help(model.terminal(for: server) == nil ? "登录服务器（新开终端标签）" : "切到这台服务器的终端标签")
@@ -154,6 +146,7 @@ struct TerminalPane: View {
         Menu {
             extra()
             Button("关闭当前标签") { model.close(tab) }
+            Button("关闭全部标签") { model.closeAll() }
             Button("关闭已结束的终端") { model.closeFinished() }
                 .disabled(!model.sessions.contains { !$0.state.isRunning })
         } label: {
@@ -228,12 +221,13 @@ private struct TabItem: View {
         .onTapGesture { model.activeTabID = tab.id }
         .help(title)
         .contextMenu {
-            if let session = tab.session, session.plan != nil {
+            if let session = tab.session, let plan = session.plan, !plan.command.isEmpty {
                 Button("重新运行") { model.rerun(session) }
                 Divider()
             }
             Button("关闭") { model.close(tab) }
             Button("关闭其他标签") { model.closeOthers(than: tab) }
+            Button("关闭全部标签") { model.closeAll() }
         }
     }
 

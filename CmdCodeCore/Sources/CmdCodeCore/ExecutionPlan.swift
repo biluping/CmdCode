@@ -7,7 +7,7 @@ public struct ExecutionPlan: Sendable, Equatable {
     public var workingDirectory: String?
     public var requiresConfirmation: Bool
     public var serverName: String
-    /// 命令名；测试连接时是“测试连接”。
+    /// 命令名；登录服务器时是“登录”。
     public var commandName: String
     public var isProduction: Bool
     /// 命令结束后留在远端的交互 shell 里。登录服务器时命令为空、这里为 true。
@@ -33,16 +33,6 @@ extension Server {
     public func sshTarget() throws -> SSHTarget {
         guard let c = credential else { throw LibraryError.serverHasNoCredential(serverName: name) }
         return SSHTarget(host: host, port: port, username: c.username, password: c.password)
-    }
-
-    /// 测试连接：`whoami && pwd`，有工作目录就先 cd。不需要确认。
-    public func testConnectionPlan() throws -> ExecutionPlan {
-        ExecutionPlan(
-            target: try sshTarget(),
-            command: ScriptBuilder.testConnectionCommand(),
-            workingDirectory: ScriptBuilder.normalizedWorkingDirectory(workingDirectory),
-            requiresConfirmation: false,
-            serverName: name, commandName: "测试连接", isProduction: isProduction)
     }
 
     /// 登录服务器：有工作目录就先 cd，然后进入交互 shell。不需要确认。
