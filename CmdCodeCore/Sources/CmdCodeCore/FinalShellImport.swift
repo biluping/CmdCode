@@ -189,7 +189,7 @@ extension Library {
 
         struct Address: Hashable { var host: String; var port: Int; var username: String }
         var existing = Set(allServers().map {
-            Address(host: $0.host, port: $0.port, username: $0.credential?.username ?? "")
+            Address(host: $0.host, port: $0.port, username: $0.loginUsername ?? "")
         })
 
         let nameCounts = Dictionary(export.connections.map { ($0.name, 1) }, uniquingKeysWith: +)

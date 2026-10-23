@@ -31,8 +31,11 @@ public struct ExecutionPlan: Sendable, Equatable {
 
 extension Server {
     public func sshTarget() throws -> SSHTarget {
-        guard let c = credential else { throw LibraryError.serverHasNoCredential(serverName: name) }
-        return SSHTarget(host: host, port: port, username: c.username, password: c.password)
+        if let c = credential {
+            return SSHTarget(host: host, port: port, username: c.username, password: c.password)
+        }
+        guard !username.isEmpty else { throw LibraryError.serverHasNoCredential(serverName: name) }
+        return SSHTarget(host: host, port: port, username: username, password: password)
     }
 
     /// 登录服务器：有工作目录就先 cd，然后进入交互 shell。不需要确认。

@@ -17,6 +17,7 @@ enum Snapshot {
         var lims232: Server
         var lims135: Server
         var build: ServerCommand
+        var jump: Server
     }
 
     static func seed(_ lib: Library) throws -> Seed {
@@ -42,8 +43,8 @@ enum Snapshot {
         for i in 1...3 {
             try lib.createServer(ServerDraft(name: "ELN 节点 \(i)", group: eln, host: "10.0.145.\(10 + i)", credential: test))
         }
-        try lib.createServer(ServerDraft(name: "跳板机", host: "10.0.0.2", credential: test))
-        return Seed(lims232: s232, lims135: s135, build: build)
+        let jump = try lib.createServer(ServerDraft(name: "跳板机", host: "10.0.0.2", username: "ops", password: "Jump#1"))
+        return Seed(lims232: s232, lims135: s135, build: build, jump: jump)
     }
 
     static func run(model: AppModel, seed: Seed, directory: String) async {
@@ -70,6 +71,7 @@ enum Snapshot {
                 model.showServer(seed.lims232)
                 model.sheet = .editServer(seed.lims232)
             }),
+            ("07b-form-server-direct", { model.sheet = .editServer(seed.jump) }),
             ("08-form-command", { model.sheet = .editCommand(seed.build) }),
             ("11-confirm", { model.pendingExecution = try? seed.build.executionPlan() }),
             ("12-confirm-production", {

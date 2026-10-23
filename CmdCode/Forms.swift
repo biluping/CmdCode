@@ -130,6 +130,7 @@ struct ServerForm: View {
     @State private var portText: String
     @State private var error: String?
     @State private var creatingCredential = false
+    @State private var revealPassword = false
 
     init(server: Server?, presetGroup: ServerGroup?) {
         self.server = server
@@ -154,7 +155,24 @@ struct ServerForm: View {
                 .frame(width: 96)
             }
             HStack(alignment: .top, spacing: 12) {
-                FormField(title: "登录凭据") {
+                FormField(title: "登录方式") {
+                    Picker("", selection: $draft.usesCredential) {
+                        Text("直接输入").tag(false)
+                        Text("密码库").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(height: 32)
+                }
+                FormField(title: "分组") {
+                    ThemedPicker(options: [(nil as ServerGroup?, Library.ungroupedTitle)]
+                                    + groups.map { ($0 as ServerGroup?, $0.name) },
+                                 selection: $draft.group)
+                }
+                .frame(width: 170)
+            }
+            if draft.usesCredential {
+                FormField(title: "登录凭据", hint: "多台服务器共用，在密码库里改一次密码全部生效") {
                     HStack(spacing: 6) {
                         ThemedPicker(options: credentials.map { ($0 as Credential?, "\($0.name) · \($0.username)") },
                                      selection: $draft.credential)
@@ -163,12 +181,23 @@ struct ServerForm: View {
                             .help("新建凭据")
                     }
                 }
-                FormField(title: "分组") {
-                    ThemedPicker(options: [(nil as ServerGroup?, Library.ungroupedTitle)]
-                                    + groups.map { ($0 as ServerGroup?, $0.name) },
-                                 selection: $draft.group)
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    FormField(title: "用户名") {
+                        ThemedTextField(placeholder: "root", text: $draft.username, monospaced: true)
+                    }
+                    .frame(width: 170)
+                    FormField(title: "密码") {
+                        HStack(spacing: 6) {
+                            ThemedTextField(placeholder: "", text: $draft.password, monospaced: true, secure: !revealPassword)
+                            Button { revealPassword.toggle() } label: {
+                                Image(systemName: revealPassword ? "eye.slash" : "eye")
+                            }
+                            .buttonStyle(IconButtonStyle(size: 30))
+                            .help(revealPassword ? "隐藏密码" : "显示密码")
+                        }
+                    }
                 }
-                .frame(width: 170)
             }
             FormField(title: "工作目录", hint: "可选，绝对路径；执行命令前会先 cd 进去") {
                 ThemedTextField(placeholder: "/usr/local/app/lims", text: $draft.workingDirectory, monospaced: true)
@@ -180,7 +209,10 @@ struct ServerForm: View {
             }
         }
         .sheet(isPresented: $creatingCredential) {
-            CredentialForm(credential: nil) { draft.credential = $0 }
+            CredentialForm(credential: nil) {
+                draft.credential = $0
+                draft.usesCredential = true
+            }
                 .environment(model)
         }
     }

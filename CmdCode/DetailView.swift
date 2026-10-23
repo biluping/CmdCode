@@ -145,7 +145,13 @@ struct ServerDetailView: View {
     }
 
     private var sshAddress: String {
-        "\(server.credential?.username ?? "?")@\(server.host):\(server.port)"
+        "\(server.loginUsername ?? "?")@\(server.host):\(server.port)"
+    }
+
+    /// 引用密码库时显示凭据名，直接输入时只显示用户名。
+    private var loginAccount: String {
+        if let c = server.credential { return "\(c.username)（密码库：\(c.name)）" }
+        return server.username.isEmpty ? "未配置" : server.username
     }
 
     private var info: some View {
@@ -154,7 +160,7 @@ struct ServerDetailView: View {
             CardDivider()
             infoRow("端口", "\(server.port)", mono: true)
             CardDivider()
-            infoRow("登录凭据", server.credential.map { "\($0.name) · \($0.username)" } ?? "未配置")
+            infoRow("登录账号", loginAccount)
             CardDivider()
             infoRow("分组", server.group?.name ?? Library.ungroupedTitle)
             CardDivider()

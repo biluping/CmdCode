@@ -56,7 +56,11 @@ public final class Server {
     public var createdAt: Date
     /// 在所属分组内的位置（拖动排序），相同时按创建时间。
     public var sortOrder: Int = 0
+    /// 不用密码库、直接填在服务器上的用户名和密码。引用了凭据（`credential != nil`）时为空。
+    public var username: String = ""
+    public var password: String = ""
 
+    /// 密码库里的凭据；为 nil 时用上面直接填的用户名和密码。
     public var credential: Credential?
     public var group: ServerGroup?
 
@@ -83,6 +87,12 @@ public final class Server {
     /// 按排序位置排列的命令（拖动排序），相同时按创建顺序。
     public var sortedCommands: [ServerCommand] {
         commands.sorted { ($0.sortOrder, $0.createdAt) < ($1.sortOrder, $1.createdAt) }
+    }
+
+    /// 登录用的用户名：引用凭据时取凭据的，否则取直接填的；都没有返回 nil。
+    public var loginUsername: String? {
+        if let credential { return credential.username }
+        return username.isEmpty ? nil : username
     }
 
     /// 同一分组内服务器的顺序。

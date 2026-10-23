@@ -110,9 +110,52 @@ struct LibraryTests {
         #expect(throws: LibraryError.emptyField("主机")) { try lib.createServer(ServerDraft(name: "n", host: " ", credential: c)) }
         #expect(throws: LibraryError.invalidPort) { try lib.createServer(ServerDraft(name: "n", host: "h", port: 0, credential: c)) }
         #expect(throws: LibraryError.invalidPort) { try lib.createServer(ServerDraft(name: "n", host: "h", port: 65536, credential: c)) }
-        #expect(throws: LibraryError.missingCredential) { try lib.createServer(ServerDraft(name: "n", host: "h")) }
+        var fromLibrary = ServerDraft(name: "n", host: "h")
+        fromLibrary.usesCredential = true
+        #expect(throws: LibraryError.missingCredential) { try lib.createServer(fromLibrary) }
+        // 直接输入时用户名、密码必填
+        #expect(throws: LibraryError.emptyField("用户名")) { try lib.createServer(ServerDraft(name: "n", host: "h")) }
+        #expect(throws: LibraryError.emptyField("用户名")) {
+            try lib.createServer(ServerDraft(name: "n", host: "h", username: " ", password: "p"))
+        }
+        #expect(throws: LibraryError.emptyField("密码")) { try lib.createServer(ServerDraft(name: "n", host: "h", username: "root")) }
         #expect(try count(Server.self) == 0)
         #expect(ServerDraft().port == 22)
+        #expect(!ServerDraft().usesCredential)
+        #expect(ServerDraft(credential: c).usesCredential)
+    }
+
+    @Test("直接输入用户名密码，和密码库凭据来回切换")
+    func directLogin() throws {
+        let c = try credential(password: "lib")
+        let s = try lib.createServer(ServerDraft(name: "跳板机", host: "h", username: " ops ", password: " p w "))
+        #expect(s.credential == nil && s.username == "ops" && s.password == " p w ")
+        #expect(s.loginUsername == "ops")
+        #expect(try s.loginPlan().target == SSHTarget(host: "h", port: 22, username: "ops", password: " p w "))
+        #expect(ServerDraft(s).usesCredential == false)
+
+        // 改用密码库：清掉直接填的用户名密码
+        var d = ServerDraft(s)
+        d.usesCredential = true
+        d.credential = c
+        try lib.updateServer(s, with: d)
+        #expect(s.credential === c && s.username.isEmpty && s.password.isEmpty)
+        #expect(try s.loginPlan().target.password == "lib")
+        #expect(lib.servers(using: c).map(\.name) == ["跳板机"])
+
+        // 再改回直接输入：不再引用凭据，凭据可以删
+        d = ServerDraft(s)
+        #expect(d.usesCredential)
+        d.usesCredential = false
+        d.username = "admin"
+        d.password = "x"
+        try lib.updateServer(s, with: d)
+        #expect(s.credential == nil && s.loginUsername == "admin")
+        try lib.deleteCredential(c)
+
+        // 复制服务器带上直接填的用户名密码
+        let copy = try lib.duplicateServer(s)
+        #expect(copy.username == "admin" && copy.password == "x" && copy.credential == nil)
     }
 
     @Test("删除服务器连同命令一起删除")

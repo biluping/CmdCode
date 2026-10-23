@@ -15,7 +15,7 @@ public enum LibraryError: Error, Equatable, LocalizedError {
         case .invalidPort: "端口必须在 1–65535 之间"
         case .missingCredential: "请选择登录凭据"
         case .credentialInUse(let names): "请先修改以下服务器的凭据：\n" + names.joined(separator: "\n")
-        case .serverHasNoCredential(let name): "服务器“\(name)”没有配置登录凭据"
+        case .serverHasNoCredential(let name): "服务器“\(name)”没有配置用户名和密码"
         }
     }
 }
@@ -209,7 +209,15 @@ public struct Library {
         s.group = d.group
         s.host = d.host.trimmingCharacters(in: .whitespacesAndNewlines)
         s.port = d.port
-        s.credential = d.credential
+        if d.usesCredential {
+            s.credential = d.credential
+            s.username = ""
+            s.password = ""
+        } else {
+            s.credential = nil
+            s.username = d.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            s.password = d.password
+        }
         s.workingDirectory = d.workingDirectory
         s.isProduction = d.isProduction
         s.note = d.note
