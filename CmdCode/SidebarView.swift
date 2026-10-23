@@ -10,10 +10,12 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 留给红黄绿按钮的位置
+            // 左边留给红黄绿按钮，右边是收起侧栏的按钮
             HStack {
                 Spacer()
+                SidebarToggleButton()
             }
+            .padding(.trailing, 12)
             .frame(height: 44)
             .background(WindowDragArea())
 

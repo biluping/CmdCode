@@ -11,10 +11,15 @@ struct ContentView: View {
     var body: some View {
         @Bindable var model = model
         HStack(spacing: 0) {
-            SidebarView()
-                .frame(width: Self.sidebarWidth)
-                .background(VisualEffectBackground(material: .sidebar))
-            Rectangle().fill(Theme.border).frame(width: 1)
+            if model.isSidebarVisible {
+                HStack(spacing: 0) {
+                    SidebarView()
+                        .frame(width: Self.sidebarWidth)
+                        .background(VisualEffectBackground(material: .sidebar))
+                    Rectangle().fill(Theme.border).frame(width: 1)
+                }
+                .transition(.move(edge: .leading))
+            }
             DetailView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.content)

@@ -320,6 +320,7 @@ struct ContentHeader<Actions: View>: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            CollapsedSidebarLeading()
             Text(title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -331,6 +332,31 @@ struct ContentHeader<Actions: View>: View {
         .frame(height: 44)
         .background(WindowDragArea())
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
+    }
+}
+
+/// 显示/隐藏左侧栏的按钮（⌃⌘S）。
+struct SidebarToggleButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button { model.toggleSidebar() } label: { Image(systemName: "sidebar.left") }
+            .buttonStyle(IconButtonStyle())
+            .focusable(false)
+            .help(model.isSidebarVisible ? "隐藏侧栏（⌃⌘S）" : "显示侧栏（⌃⌘S）")
+    }
+}
+
+/// 侧栏隐藏时放在内容区顶部栏最左边：先让出红黄绿按钮的位置，再放显示侧栏的按钮。
+struct CollapsedSidebarLeading: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if !model.isSidebarVisible {
+            SidebarToggleButton()
+                .padding(.leading, 64)
+                .padding(.trailing, 4)
+        }
     }
 }
 

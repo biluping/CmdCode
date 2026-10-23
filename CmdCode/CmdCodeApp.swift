@@ -64,6 +64,10 @@ struct CmdCodeApp: App {
                 Button("关闭标签") { model.closeActiveTab() }
                     .keyboardShortcut("w")
             }
+            CommandGroup(before: .sidebar) {
+                Button("显示/隐藏侧栏") { model.toggleSidebar() }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+            }
             CommandGroup(before: .windowArrangement) {
                 Button("上一个标签") { model.selectAdjacentTab(-1) }
                     .keyboardShortcut("[", modifiers: [.command, .shift])

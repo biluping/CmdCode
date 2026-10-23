@@ -137,8 +137,13 @@ final class CmdTerminalView: LocalProcessTerminalView {
         // 不画系统的焦点框，终端区域本身就是焦点所在。
         focusRingType = .none
         setCursorStyle(.steadyBlock)
+        // SwiftTerm 默认只留 500 行回滚，日志一多往上翻很快就到顶。
+        changeScrollback(Self.scrollbackLines)
         applyPalette()
     }
+
+    /// 终端回滚保留的行数。
+    static let scrollbackLines = 10_000
 
     /// 光标一律不闪烁：闪烁是无限循环的 CoreAnimation 动画，全屏时终端内容要等它才上屏，
     /// 每次按键延迟 150–300ms。远端程序（如 vim）要求闪烁样式时，换成同形状的不闪烁样式。

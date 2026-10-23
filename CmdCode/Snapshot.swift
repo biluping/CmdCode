@@ -141,6 +141,12 @@ enum Snapshot {
             ("21-tabs-files-dirty", {
                 model.fileBrowser(for: seed.lims232)?.draft += "echo deployed\n"
             }),
+            ("22-sidebar-hidden-tabs", { model.isSidebarVisible = false }),
+            ("23-sidebar-hidden-server", { model.showServer(seed.lims232) }),
+            ("24-sidebar-shown", {
+                model.isSidebarVisible = true
+                model.selection = .tabs
+            }),
         ]
 
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {

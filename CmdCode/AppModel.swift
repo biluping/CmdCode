@@ -1,6 +1,7 @@
 import CmdCodeCore
 import Foundation
 import Observation
+import SwiftUI
 import SwiftData
 
 enum SidebarSelection: Hashable {
@@ -110,6 +111,8 @@ final class AppModel {
     var alert: AppAlert?
     /// 底部的短暂提示，比如“已复制密码”。
     var toast: String?
+    /// 左侧栏是否显示（⌃⌘S 或顶部的侧栏按钮切换）。不持久化，每次启动都显示。
+    var isSidebarVisible = true
     /// 左侧栏的展开状态。不持久化，每次启动全部折叠。
     var expandedSections: Set<SidebarSection.ID> = []
     var expandedServers: Set<PersistentIdentifier> = []
@@ -376,6 +379,10 @@ final class AppModel {
 
     func copyPassword(_ c: Credential) {
         clipboard.copy(c.password)
+    }
+
+    func toggleSidebar() {
+        withAnimation(.easeOut(duration: 0.2)) { isSidebarVisible.toggle() }
     }
 
     /// 打开 ⌘K 搜索浮层并聚焦输入框。

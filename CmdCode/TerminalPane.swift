@@ -83,6 +83,9 @@ struct TerminalPane: View {
 
     private var tabBar: some View {
         HStack(spacing: 6) {
+            CollapsedSidebarLeading()
+                .padding(.leading, 16)
+                .padding(.trailing, -8)
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
                     HStack(spacing: 2) {
