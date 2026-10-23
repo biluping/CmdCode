@@ -478,11 +478,10 @@ private struct ServerRows: View {
 
     @ViewBuilder
     private var serverMenu: some View {
-        Button("详情") { model.selection = .server(id) }
-        Divider()
-        Button("新建命令") { model.sheet = .newCommand(server) }
         Button("登录服务器") { model.login(server) }
         Button("浏览文件") { model.openFiles(server) }
+        Divider()
+        Button("新建命令") { model.sheet = .newCommand(server) }
         Divider()
         Button("编辑") { model.sheet = .editServer(server) }
         Button("复制") { model.duplicate(server) }
@@ -497,6 +496,8 @@ private struct ServerRows: View {
         }
         Divider()
         Button("删除", role: .destructive) { model.requestDelete(server) }
+        Divider()
+        Button("详情") { model.selection = .server(id) }
     }
 }
 
