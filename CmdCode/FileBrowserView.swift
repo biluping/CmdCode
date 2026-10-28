@@ -58,6 +58,29 @@ struct FileBrowserView: View {
         } message: {
             Text(browser.saveError ?? "")
         }
+        .alert(deleteTitle, isPresented: isPresent($browser.pendingDelete), presenting: browser.pendingDelete) { path in
+            Button("删除", role: .destructive) { browser.delete(path) }
+            Button("取消", role: .cancel) {}
+        } message: { path in
+            Text(deleteMessage(path))
+        }
+        .alert("删除失败", isPresented: isPresent($browser.deleteError)) {
+            Button("好") {}
+        } message: {
+            Text(browser.deleteError ?? "")
+        }
+    }
+
+    private var deleteTitle: String {
+        guard let path = browser.pendingDelete else { return "" }
+        let name = (path as NSString).lastPathComponent
+        return browser.isProduction ? "删除生产环境服务器上的“\(name)”？" : "删除“\(name)”？"
+    }
+
+    private func deleteMessage(_ path: String) -> String {
+        var text = "\(server.name)：\(path)\n删除后无法恢复。"
+        if path == browser.openedPath && browser.isDirty { text += "\n这个文件还有未保存的修改，会一起丢失。" }
+        return text
     }
 
     private var uploadTitle: String {
@@ -127,6 +150,11 @@ private struct DirectoryList: View {
         Button("复制路径") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(path, forType: .string)
+        }
+        // 目录不能删；指向目录的链接可以（只删链接本身）。
+        if entry.kind != .directory || entry.isSymlink {
+            Divider()
+            Button("删除…", role: .destructive) { browser.requestDelete(path) }
         }
     }
 
@@ -305,6 +333,10 @@ private struct FilePreview: View {
                 .buttonStyle(IconButtonStyle())
                 .help("下载到本地")
                 .disabled(browser.transfer != nil)
+            Button { browser.requestDelete(path) } label: { Image(systemName: "trash") }
+                .buttonStyle(IconButtonStyle())
+                .help("删除这个文件（会先确认）")
+                .disabled(browser.isSaving)
             if browser.content != nil || browser.readError != nil {
                 Button { browser.requestReload() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(IconButtonStyle())

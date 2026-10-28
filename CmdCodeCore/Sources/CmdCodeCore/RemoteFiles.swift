@@ -207,6 +207,19 @@ public enum RemoteFileScript {
         """
     }
 
+    /// 删除文件：普通文件、符号链接（只删链接本身）和其他非目录条目；目录不删。
+    /// 删除要求所在目录可写，和文件本身的写权限无关。
+    public static func delete(path: String) -> String {
+        """
+        f=\(ScriptBuilder.shq(path))
+        [ -e "$f" ] || [ -L "$f" ] || { echo "文件不存在：$f" >&2; exit 1; }
+        if [ -d "$f" ] && [ ! -L "$f" ]; then echo "是目录，不能删除：$f" >&2; exit 1; fi
+        d=$(dirname -- "$f")
+        [ -w "$d" ] || { echo "没有写权限：$d" >&2; exit \(statusNotWritable); }
+        rm -f -- "$f"
+        """
+    }
+
     public static func parseListing(_ data: Data) throws -> RemoteDirectoryListing {
         var records = data.split(separator: 0, omittingEmptySubsequences: false).map { String(decoding: $0, as: UTF8.self) }
         // 每条记录都以 NUL 结尾，最后一段是空的。
@@ -346,6 +359,15 @@ public struct RemoteFileClient: Sendable {
         let r = try await run(script, options: ProcessOptions(input: .data(data), timeout: timeout))
         try check(r, path: path)
         return String(decoding: r.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 删除文件（不能删目录）。没有权限时报 `.notWritable`，路径是所在目录。
+    public func delete(path: String) async throws {
+        let r = try await run(RemoteFileScript.delete(path: path), options: ProcessOptions(timeout: timeout))
+        if r.status == RemoteFileScript.statusNotWritable {
+            throw RemoteFileError.notWritable(RemoteFileScript.parent(of: path) ?? path)
+        }
+        try check(r, path: path)
     }
 
     // MARK: 上传下载

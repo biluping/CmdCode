@@ -398,4 +398,32 @@ struct LibraryTests {
         #expect(names("tail nomatch") == ([], []))
         #expect(lib.search("   ").isEmpty)
     }
+
+    @Test("左侧栏搜索：服务器匹配时保留全部命令，否则只留匹配的命令；空分组去掉")
+    func sidebarFilter() throws {
+        let c = try credential()
+        let g = try lib.createGroup(name: "生产")
+        let lims = try server("232 - LIMS 主服务", host: "10.0.144.232", credential: c)
+        let eln = try server("ELN", host: "10.0.144.70", credential: c)
+        try lib.moveServer(eln, to: g)
+        try lib.createCommand(CommandDraft(name: "构建", content: "cd /opt && ./build.sh"), on: lims)
+        try lib.createCommand(CommandDraft(name: "看日志", content: "tail -f /var/log/lims.log"), on: lims)
+        try lib.createCommand(CommandDraft(name: "重启", content: "systemctl restart eln"), on: eln)
+        try lib.createCommand(CommandDraft(name: "看日志", content: "tail -f app.log"), on: eln)
+
+        func shape(_ q: String) -> [[String]] {
+            SidebarSection.filter(lib.sidebarSections(), query: q).map { section in
+                [section.title] + section.servers.map { s in
+                    s.name + ":" + section.commands(of: s).map(\.name).joined(separator: ",")
+                }
+            }
+        }
+        #expect(shape("lims") == [["未分组", "232 - LIMS 主服务:构建,看日志"]])
+        #expect(shape("144.70") == [["生产", "ELN:重启,看日志"]])
+        #expect(shape("日志") == [["生产", "ELN:看日志"], ["未分组", "232 - LIMS 主服务:看日志"]])
+        #expect(shape("RESTART") == [["生产", "ELN:重启"]])
+        #expect(shape("nomatch") == [])
+        #expect(shape("  ").map(\.first) == ["生产", "未分组"])
+        #expect(SidebarSection.filter(lib.sidebarSections(), query: "").allSatisfy { $0.visibleCommands == nil })
+    }
 }

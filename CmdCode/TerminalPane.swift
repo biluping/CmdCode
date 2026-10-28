@@ -39,6 +39,14 @@ struct TerminalPane: View {
         } message: {
             Text(tabCloseMessage)
         }
+        .alert("重新连接“\(model.pendingReconnect?.serverName ?? "")”？", isPresented: isPresent($model.pendingReconnect),
+               presenting: model.pendingReconnect) { session in
+            Button("重新连接", role: .destructive) { model.confirmReconnect(session) }
+                .keyboardShortcut(.defaultAction)
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text("终端还连着服务器，重连会断开当前连接并结束远端进程。")
+        }
     }
 
     /// 终端右键“浏览文件”：打开这个会话所属服务器的文件标签，跳到终端当前所在的目录。
@@ -90,13 +98,8 @@ struct TerminalPane: View {
                 .padding(.trailing, -8)
             ScrollViewReader { proxy in
                 ScrollView(.horizontal) {
-                    HStack(spacing: 2) {
-                        ForEach(model.tabs) { tab in
-                            TabItem(tab: tab, isActive: tab.id == model.activeTab?.id)
-                                .id(tab.id)
-                        }
-                    }
-                    .padding(.horizontal, 8)
+                    TabStrip()
+                        .padding(.horizontal, 8)
                 }
                 .scrollIndicators(.never)
                 .onChange(of: model.activeTabID) {
@@ -116,13 +119,18 @@ struct TerminalPane: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
 
-    /// 终端标签右上角：命令终端有重新运行，登录终端没有；都有浏览文件。和文件标签一样都用图标。
+    /// 终端标签右上角：命令终端有重新运行，登录终端有重连；都有浏览文件。和文件标签一样都用图标。
     @ViewBuilder
     private func actions(for session: TerminalSession) -> some View {
         if let plan = session.plan, !plan.command.isEmpty {
             Button { model.rerun(session) } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(IconButtonStyle())
                 .help("重新运行")
+        }
+        if session.isLogin {
+            Button { model.reconnect(session) } label: { Image(systemName: "arrow.triangle.2.circlepath") }
+                .buttonStyle(IconButtonStyle())
+                .help(session.state.isRunning ? "重新连接（会断开当前连接，先确认）" : "重新连接")
         }
         if let browse = browseFiles(for: session) {
             Button(action: browse) { Image(systemName: "folder") }
@@ -179,6 +187,78 @@ struct TerminalPane: View {
 
 // MARK: - 标签
 
+/// 一排标签，可以左右拖动调整顺序：拖着的标签跟着鼠标走，中心越过相邻标签的中线就和它交换位置。
+/// 用 DragGesture 而不是 onDrag：后者在 macOS 上同一个视图第二次拖动时不再调用闭包（见 `treeDraggable`）。
+private struct TabStrip: View {
+    @Environment(AppModel.self) private var model
+    @State private var frames: [UUID: CGRect] = [:]
+    @State private var draggingID: UUID?
+    /// 拖动开始时标签的左边缘，以及之后因交换位置而在布局中移动的距离。
+    @State private var startMinX: CGFloat = 0
+    @State private var shift: CGFloat = 0
+    @State private var offset: CGFloat = 0
+    /// 鼠标还按着（松手后的落位动画期间为 false）。
+    @State private var isDragging = false
+
+    private static let spacing: CGFloat = 2
+
+    var body: some View {
+        HStack(spacing: Self.spacing) {
+            ForEach(model.tabs) { tab in
+                let dragging = draggingID == tab.id
+                TabItem(tab: tab, isActive: tab.id == model.activeTab?.id)
+                    .id(tab.id)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("tabStrip")) } action: { frames[tab.id] = $0 }
+                    .offset(x: dragging ? offset : 0)
+                    .zIndex(dragging ? 1 : 0)
+                    .opacity(dragging ? 0.85 : 1)
+                    // 拖着的标签在布局里换位和偏移量同时变化、互相抵消，不做动画；相邻标签让位时有动画。
+                    .transaction { if dragging && isDragging { $0.animation = nil } }
+                    .gesture(DragGesture(minimumDistance: 6, coordinateSpace: .named("tabStrip"))
+                        .onChanged { drag(tab.id, translation: $0.translation.width) }
+                        .onEnded { _ in endDrag() })
+            }
+        }
+        .coordinateSpace(.named("tabStrip"))
+    }
+
+    private func drag(_ id: UUID, translation: CGFloat) {
+        guard let frame = frames[id] else { return }
+        if !isDragging || draggingID != id {
+            draggingID = id
+            isDragging = true
+            startMinX = frame.minX
+            shift = 0
+            model.activeTabID = id
+        }
+        offset = translation - shift
+        guard let index = model.tabs.firstIndex(where: { $0.id == id }) else { return }
+        let center = startMinX + frame.width / 2 + translation
+        if index + 1 < model.tabs.count, let next = frames[model.tabs[index + 1].id], center > next.midX {
+            withAnimation(.easeOut(duration: 0.15)) {
+                model.moveTab(from: index, to: index + 1)
+                shift += next.width + Self.spacing
+                offset = translation - shift
+            }
+        } else if index > 0, let prev = frames[model.tabs[index - 1].id], center < prev.midX {
+            withAnimation(.easeOut(duration: 0.15)) {
+                model.moveTab(from: index, to: index - 1)
+                shift -= prev.width + Self.spacing
+                offset = translation - shift
+            }
+        }
+    }
+
+    private func endDrag() {
+        isDragging = false
+        withAnimation(.easeOut(duration: 0.15)) { offset = 0 }
+        // 落位动画结束后再取消“拖动中”的样式。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if !isDragging { draggingID = nil }
+        }
+    }
+}
+
 private struct TabItem: View {
     @Environment(AppModel.self) private var model
     let tab: WorkspaceTab
@@ -228,6 +308,10 @@ private struct TabItem: View {
         .contextMenu {
             if let session = tab.session, let plan = session.plan, !plan.command.isEmpty {
                 Button("重新运行") { model.rerun(session) }
+                Divider()
+            }
+            if let session = tab.session, session.isLogin {
+                Button("重新连接") { model.reconnect(session) }
                 Divider()
             }
             Button("关闭") { model.close(tab) }

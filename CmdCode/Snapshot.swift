@@ -115,9 +115,14 @@ enum Snapshot {
                 browser?.pendingUpload = .init(source: URL(fileURLWithPath: "/tmp/application.yml"),
                                                target: filesDir + "/application.yml", exists: true)
             }),
-            ("19-files-closed", {
+            ("18b-files-delete", {
                 let browser = model.fileBrowser(for: seed.lims232)
                 browser?.pendingUpload = nil
+                browser?.requestDelete(filesDir + "/application.yml")
+            }),
+            ("19-files-closed", {
+                let browser = model.fileBrowser(for: seed.lims232)
+                browser?.pendingDelete = nil
                 browser?.requestClose()
                 browser?.confirmDiscard()
             }),
@@ -132,6 +137,10 @@ enum Snapshot {
                     let build = demoSession("构建", server: "232 - lims 主服务", production: false, script: buildLog)
                     build.serverID = seed.lims232.persistentModelID  // 显示“浏览文件”按钮
                     model.open(build)
+                    // 登录终端：标签栏显示重连按钮
+                    model.open(demoSession("登录", server: "232 - lims 主服务", production: false,
+                                           script: "echo 'Last login: Tue Oct 28 09:12:01 2026'; sleep 600",
+                                           plan: try? seed.lims232.loginPlan()))
                 }
                 model.selection = .tabs
             }),
@@ -148,6 +157,14 @@ enum Snapshot {
             ("24-sidebar-shown", {
                 model.isSidebarVisible = true
                 model.selection = .tabs
+            }),
+            ("25-sidebar-filter", { model.sidebarFilter = "日志" }),
+            ("26-sidebar-filter-none", { model.sidebarFilter = "没有这个" }),
+            ("27-sidebar-located", {
+                // ⌘K 定位：关键词会把它过滤掉时先清空
+                model.expandedSections.removeAll()
+                model.expandedServers.removeAll()
+                model.locate(seed.lims135)
             }),
         ]
 
@@ -169,6 +186,8 @@ enum Snapshot {
             }
             model.sheet = nil
             model.toast = nil
+            model.sidebarFilter = ""
+            model.locatedServer = nil
             // 下一轮外观重新创建终端会话
             model.hangUpAll()
             model.tabs.removeAll()
@@ -223,9 +242,10 @@ enum Snapshot {
         return (dir, fake)
     }
 
-    private static func demoSession(_ command: String, server: String, production: Bool, script: String) -> TerminalSession {
+    private static func demoSession(_ command: String, server: String, production: Bool, script: String,
+                                    plan: ExecutionPlan? = nil) -> TerminalSession {
         TerminalSession(serverName: server, commandName: command, isProduction: production,
-                        address: "root@10.0.144.232:2233", workingDirectory: "/usr/local/app/lims", plan: nil,
+                        address: "root@10.0.144.232:2233", workingDirectory: "/usr/local/app/lims", plan: plan,
                         launch: .init(executable: "/bin/bash", arguments: ["-c", script], environment: [:]))
     }
 

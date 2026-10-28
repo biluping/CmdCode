@@ -232,8 +232,12 @@ struct SearchPanel: View {
         let item = items[selectedIndex]
         close()
         switch item {
-        case .server(let s): model.login(s)
-        case .command(let c): model.run(c)
+        case .server(let s):
+            model.locate(s)
+            model.login(s)
+        case .command(let c):
+            if let s = c.server { model.locate(s) }
+            model.run(c)
         case .action(.newServer): model.sheet = .newServer(group: nil)
         case .action(.credentials): model.selection = .credentials
         case .action(.newGroup): model.sheet = .newGroup

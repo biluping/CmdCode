@@ -259,6 +259,47 @@ struct RemoteFilesTests {
         }
     }
 
+    @Test("删除：特殊文件名、只删链接本身；目录、不存在、目录不可写时报错")
+    func delete() async throws {
+        let base = try Shell.makeTempDir()
+        let client = try makeClient(base: base)
+        let dir = base + "/删 $dir"
+        try Shell.mkdir(dir + "/sub")
+        let file = dir + "/it's \"x\".conf"
+        try Data("a".utf8).write(to: URL(fileURLWithPath: file))
+        let target = dir + "/target"
+        try Data("t".utf8).write(to: URL(fileURLWithPath: target))
+        try FileManager.default.createSymbolicLink(atPath: dir + "/link", withDestinationPath: target)
+        try FileManager.default.createSymbolicLink(atPath: dir + "/broken", withDestinationPath: dir + "/nope")
+        try FileManager.default.createSymbolicLink(atPath: dir + "/dirlink", withDestinationPath: dir + "/sub")
+
+        try await client.delete(path: file)
+        try await client.delete(path: dir + "/link")
+        try await client.delete(path: dir + "/broken")
+        try await client.delete(path: dir + "/dirlink")
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: dir)) == ["sub", "target"])
+
+        await #expect {
+            try await client.delete(path: dir + "/sub")
+        } throws: { error in
+            guard case .remote(_, let message) = error as? RemoteFileError else { return false }
+            return message.contains("是目录")
+        }
+        await #expect {
+            try await client.delete(path: dir + "/nope")
+        } throws: { error in
+            guard case .remote(_, let message) = error as? RemoteFileError else { return false }
+            return message.contains("文件不存在")
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir) }
+        await #expect(throws: RemoteFileError.notWritable(dir)) {
+            try await client.delete(path: target)
+        }
+        #expect(FileManager.default.fileExists(atPath: target))
+    }
+
     @Test("保存大内容遇到冲突时不会因 SIGPIPE 崩溃")
     func bigWriteConflict() async throws {
         let base = try Shell.makeTempDir()

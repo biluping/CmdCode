@@ -65,17 +65,40 @@ struct SidebarView: View {
             .padding(.top, 18)
             .padding(.bottom, 4)
 
-            ScrollView {
-                // 不用 LazyVStack：放置后换 id 重建行时，LazyVStack 里的行会卡在过渡中不显示。
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(SidebarSection.make(groups: groups, servers: servers)) { section in
-                        SectionRows(section: section, groups: groups)
+            SidebarFilterField()
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+
+            let isFiltering = !model.sidebarFilter.trimmingCharacters(in: .whitespaces).isEmpty
+            let sections = SidebarSection.filter(SidebarSection.make(groups: groups, servers: servers),
+                                                 query: model.sidebarFilter)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    // 不用 LazyVStack：放置后换 id 重建行时，LazyVStack 里的行会卡在过渡中不显示。
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(sections) { section in
+                            SectionRows(section: section, groups: groups, isFiltering: isFiltering)
+                        }
+                        if sections.isEmpty {
+                            Text("没有匹配的服务器或命令")
+                                .font(Theme.small)
+                                .foregroundStyle(Theme.faint)
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 16)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 12)
+                }
+                .scrollIndicators(.never)
+                // ⌘K 定位：等展开后的行排好版再滚过去。
+                .onChange(of: model.locateRequest) {
+                    guard let id = model.locatedServer else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(ServerRows.anchor(id), anchor: .center) }
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 12)
             }
-            .scrollIndicators(.never)
             // 列表空白处右键；分组和服务器行有自己的菜单。
             .contextMenu {
                 Button("新建服务器") { model.sheet = .newServer(group: nil) }
@@ -96,6 +119,42 @@ struct SidebarView: View {
         .padding(.horizontal, 18)
         .frame(height: 40)
         .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
+    }
+}
+
+// MARK: - 搜索框
+
+/// 左侧栏的服务器和命令搜索框：按服务器名、IP、命令名、命令内容过滤，Esc 清空。
+private struct SidebarFilterField: View {
+    @Environment(AppModel.self) private var model
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        @Bindable var model = model
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.faint)
+            TextField("过滤服务器、命令", text: $model.sidebarFilter)
+                .textFieldStyle(.plain)
+                .font(Theme.body)
+                .focused($focused)
+                .onExitCommand { model.sidebarFilter = "" }
+            if !model.sidebarFilter.isEmpty {
+                Button { model.sidebarFilter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.faint)
+                .focusable(false)
+                .help("清空")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(Theme.subtleFill, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(focused ? Color.accentColor.opacity(0.6) : Theme.border))
     }
 }
 
@@ -307,12 +366,14 @@ private struct SectionRows: View {
     @Environment(AppModel.self) private var model
     let section: SidebarSection
     let groups: [ServerGroup]
+    /// 左侧栏在搜索：所有分组和服务器都展开。
+    let isFiltering: Bool
 
     @State private var dropSpot: DropSpot?
     @State private var draftName = ""
     @FocusState private var nameFocused: Bool
 
-    private var isExpanded: Bool { model.expandedSections.contains(section.id) }
+    private var isExpanded: Bool { isFiltering || model.expandedSections.contains(section.id) }
     private var isRenaming: Bool {
         guard let group = section.group else { return false }
         return model.renamingGroup == group.persistentModelID
@@ -338,7 +399,9 @@ private struct SectionRows: View {
         .animation(.easeOut(duration: 0.12), value: isExpanded)
 
         if isExpanded {
-            ForEach(section.servers) { ServerRows(server: $0, groups: groups) }
+            ForEach(section.servers) {
+                ServerRows(server: $0, commands: section.commands(of: $0), groups: groups, isFiltering: isFiltering)
+            }
             if section.servers.isEmpty {
                 Text("没有服务器")
                     .font(Theme.small)
@@ -393,6 +456,7 @@ private struct SectionRows: View {
     }
 
     private func toggle() {
+        guard !isFiltering else { return }
         if isExpanded { model.expandedSections.remove(section.id) } else { model.expandedSections.insert(section.id) }
     }
 
@@ -427,12 +491,21 @@ private struct GroupDragSource: ViewModifier {
 private struct ServerRows: View {
     @Environment(AppModel.self) private var model
     let server: Server
+    /// 显示的命令：平时是全部，搜索时只有匹配的。
+    let commands: [ServerCommand]
     let groups: [ServerGroup]
+    let isFiltering: Bool
     @State private var dropSpot: DropSpot?
 
+    /// ⌘K 定位时滚动的目标。
+    static func anchor(_ id: PersistentIdentifier) -> String { "server-\(id.hashValue)" }
+
     private var id: PersistentIdentifier { server.persistentModelID }
-    private var isExpanded: Bool { model.expandedServers.contains(id) }
-    private var isSelected: Bool { model.selection == .server(id) }
+    private var isExpanded: Bool { isFiltering || model.expandedServers.contains(id) }
+    /// 打开了详情，或者右侧显示标签页时它是 ⌘K 定位到的服务器。
+    private var isSelected: Bool {
+        model.selection == .server(id) || (model.selection == .tabs && model.locatedServer == id)
+    }
 
     var body: some View {
         TreeRow(depth: 1, isExpanded: isExpanded, icon: "server.rack",
@@ -451,9 +524,10 @@ private struct ServerRows: View {
             model.drop(item, onServer: server, spot: spot)
         })
         .dropIndicator(dropSpot, indent: 22)
+        .background(Color.clear.id(Self.anchor(id)))
 
         if isExpanded {
-            ForEach(server.sortedCommands) { CommandRow(command: $0) }
+            ForEach(commands) { CommandRow(command: $0) }
             if server.commands.isEmpty {
                 Button { model.sheet = .newCommand(server) } label: {
                     Label("新建命令", systemImage: "plus")
@@ -475,6 +549,7 @@ private struct ServerRows: View {
     }
 
     private func toggle() {
+        guard !isFiltering else { return }
         if isExpanded { model.expandedServers.remove(id) } else { model.expandedServers.insert(id) }
     }
 

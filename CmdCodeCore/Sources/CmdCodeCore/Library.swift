@@ -29,6 +29,8 @@ public struct SidebarSection: Identifiable {
 
     public var group: ServerGroup?
     public var servers: [Server]
+    /// 左侧栏搜索时每台服务器要显示的命令；nil 表示没在搜索，全部显示。
+    public var visibleCommands: [PersistentIdentifier: [ServerCommand]]?
 
     public var id: ID { group.map { .group($0.persistentModelID) } ?? .ungrouped }
     public var title: String { group?.name ?? Library.ungroupedTitle }
@@ -45,6 +47,51 @@ public struct SidebarSection: Identifiable {
         return groups.map { SidebarSection(group: $0, servers: byGroup[$0.persistentModelID] ?? []) }
             + [SidebarSection(group: nil, servers: ungrouped)]
     }
+
+    /// 这台服务器在左侧栏里显示的命令。
+    public func commands(of server: Server) -> [ServerCommand] {
+        visibleCommands?[server.persistentModelID] ?? server.sortedCommands
+    }
+
+    /// 左侧栏搜索：服务器名或 IP 匹配时保留它的全部命令；不匹配时只留下名称或内容匹配的命令，
+    /// 一条都没有就去掉这台服务器；没剩服务器的分组也去掉。关键词为空时原样返回。
+    public static func filter(_ sections: [SidebarSection], query: String) -> [SidebarSection] {
+        let matcher = SearchMatcher(query)
+        guard !matcher.isEmpty else { return sections }
+        return sections.compactMap { section in
+            var result = SidebarSection(group: section.group, servers: [], visibleCommands: [:])
+            for s in section.servers {
+                let commands = matcher.matches(server: s)
+                    ? s.sortedCommands : s.sortedCommands.filter { matcher.matches(command: $0) }
+                guard matcher.matches(server: s) || !commands.isEmpty else { continue }
+                result.servers.append(s)
+                result.visibleCommands?[s.persistentModelID] = commands
+            }
+            return result.servers.isEmpty ? nil : result
+        }
+    }
+}
+
+/// 搜索关键词：忽略大小写，空格分隔的每个词都要出现在某个字段里（可以分散在不同字段）。
+public struct SearchMatcher {
+    private let tokens: [String]
+
+    public init(_ query: String) {
+        tokens = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    public var isEmpty: Bool { tokens.isEmpty }
+
+    public func matches(_ fields: String...) -> Bool {
+        let haystack = fields.joined(separator: "\n").lowercased()
+        return tokens.allSatisfy(haystack.contains)
+    }
+
+    /// 服务器按名称和 IP 匹配。
+    public func matches(server s: Server) -> Bool { matches(s.name, s.host) }
+
+    /// 命令按名称和内容匹配。
+    public func matches(command c: ServerCommand) -> Bool { matches(c.name, c.content) }
 }
 
 public struct SearchResults {
@@ -326,16 +373,12 @@ public struct Library {
 
     /// 按服务器名、IP、命令名、命令内容模糊搜索：忽略大小写，空格分隔的每个词都要出现。
     public func search(_ query: String) -> SearchResults {
-        let tokens = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
-        guard !tokens.isEmpty else { return SearchResults() }
-        func matches(_ fields: String...) -> Bool {
-            let haystack = fields.joined(separator: "\n").lowercased()
-            return tokens.allSatisfy(haystack.contains)
-        }
+        let matcher = SearchMatcher(query)
+        guard !matcher.isEmpty else { return SearchResults() }
         var results = SearchResults()
         for s in allServers() {
-            if matches(s.name, s.host) { results.servers.append(s) }
-            for c in s.sortedCommands where matches(c.name, c.content) { results.commands.append(c) }
+            if matcher.matches(server: s) { results.servers.append(s) }
+            for c in s.sortedCommands where matcher.matches(command: c) { results.commands.append(c) }
         }
         return results
     }

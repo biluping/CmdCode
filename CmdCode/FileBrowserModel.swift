@@ -46,6 +46,9 @@ final class FileBrowserModel: Identifiable {
     /// 上传前要用户确认（覆盖已有文件、生产环境）。
     var pendingUpload: PendingUpload?
     var transferError: (title: String, message: String)?
+    /// 等用户确认删除的文件路径。
+    var pendingDelete: String?
+    var deleteError: String?
 
     struct Transfer {
         enum Kind { case upload, download }
@@ -231,6 +234,30 @@ final class FileBrowserModel: Identifiable {
     func reloadAfterConflict() {
         conflictPending = false
         if let openedPath { read(openedPath) }
+    }
+
+    // MARK: 删除
+
+    /// 删除文件前先确认（目录不能删）。
+    func requestDelete(_ path: String) {
+        guard !isSaving else { return }
+        pendingDelete = path
+    }
+
+    /// 确认后删除；删的是正在查看的文件就一起关掉（未保存的修改随之放弃，确认框里已提示）。
+    func delete(_ path: String) {
+        pendingDelete = nil
+        let client = client
+        Task {
+            do {
+                try await client.delete(path: path)
+                notify("已删除 \((path as NSString).lastPathComponent)")
+                if openedPath == path { close() }
+            } catch {
+                deleteError = Self.message(error)
+            }
+            if let dir = listing?.path { go(to: dir) }
+        }
     }
 
     // MARK: 上传下载

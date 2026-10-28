@@ -116,6 +116,12 @@ final class AppModel {
     /// 左侧栏的展开状态。不持久化，每次启动全部折叠。
     var expandedSections: Set<SidebarSection.ID> = []
     var expandedServers: Set<PersistentIdentifier> = []
+    /// 左侧栏搜索框里的关键词；不为空时只显示匹配的服务器和命令，并全部展开。
+    var sidebarFilter = ""
+    /// ⌘K 打开过的服务器：左侧栏展开到它并高亮（右侧显示标签页时）。
+    var locatedServer: PersistentIdentifier?
+    /// 每次定位加一，左侧栏据此滚动到 `locatedServer`。
+    private(set) var locateRequest = 0
     /// 正在原地重命名的分组。
     var renamingGroup: PersistentIdentifier?
     /// 正在拖动的内容（拖动只在左侧栏内部进行，不需要真正序列化）。
@@ -296,6 +302,12 @@ final class AppModel {
         }
     }
 
+    /// 拖动标签调整顺序：把 `from` 位置的标签挪到 `to`。
+    func moveTab(from: Int, to: Int) {
+        guard tabs.indices.contains(from), tabs.indices.contains(to), from != to else { return }
+        tabs.insert(tabs.remove(at: from), at: to)
+    }
+
     /// 切换到相邻的标签（⌘⇧[ / ⌘⇧]）。
     func selectAdjacentTab(_ offset: Int) {
         guard !tabs.isEmpty, let current = activeTab,
@@ -325,6 +337,22 @@ final class AppModel {
     /// 重新运行：生产环境照常先确认，确认后在原标签里重新开始。
     func rerun(_ session: TerminalSession) {
         guard let plan = session.plan else { return }
+        prepare(plan, serverID: session.serverID, replacing: session.id)
+    }
+
+    /// 等待确认的重连（还连着时重连会断开当前连接）。
+    var pendingReconnect: TerminalSession?
+
+    /// 登录终端的重连：在原标签里重新登录，回到远端 shell 最后所在的目录。还连着时先确认。
+    func reconnect(_ session: TerminalSession) {
+        guard session.isLogin else { return }
+        if session.state.isRunning { pendingReconnect = session } else { confirmReconnect(session) }
+    }
+
+    func confirmReconnect(_ session: TerminalSession) {
+        pendingReconnect = nil
+        guard var plan = session.plan, tabs.contains(where: { $0.id == session.id }) else { return }
+        if let dir = ScriptBuilder.normalizedWorkingDirectory(session.currentDirectory) { plan.workingDirectory = dir }
         prepare(plan, serverID: session.serverID, replacing: session.id)
     }
 
@@ -396,6 +424,19 @@ final class AppModel {
         selection = .server(s.persistentModelID)
         expandedSections.insert(s.group.map { .group($0.persistentModelID) } ?? .ungrouped)
         expandedServers.insert(s.persistentModelID)
+    }
+
+    /// ⌘K 登录服务器或执行命令后，左侧栏展开到这台服务器、滚动过去并高亮。
+    /// 搜索框里的关键词会让它被过滤掉时，清空关键词。
+    func locate(_ s: Server) {
+        let matcher = SearchMatcher(sidebarFilter)
+        if !matcher.isEmpty, !matcher.matches(server: s), !s.commands.contains(where: { matcher.matches(command: $0) }) {
+            sidebarFilter = ""
+        }
+        expandedSections.insert(s.group.map { .group($0.persistentModelID) } ?? .ungrouped)
+        expandedServers.insert(s.persistentModelID)
+        locatedServer = s.persistentModelID
+        locateRequest += 1
     }
 
     @ObservationIgnored private var toastTask: Task<Void, Never>?

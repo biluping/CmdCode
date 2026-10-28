@@ -48,6 +48,9 @@ final class TerminalSession: Identifiable {
 
     var title: String { "\(serverName) / \(commandName)" }
 
+    /// 登录终端（没有命令，只开交互 shell），可以重连；命令终端是重新运行。
+    var isLogin: Bool { plan.map { $0.command.isEmpty } ?? false }
+
     init(serverName: String, commandName: String, isProduction: Bool, address: String,
          workingDirectory: String?, plan: ExecutionPlan?, launch: Launch) {
         self.serverName = serverName
