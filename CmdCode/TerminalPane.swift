@@ -83,7 +83,7 @@ struct TerminalPane: View {
         }
         for b in list.compactMap(\.browser) {
             if b.isDirty, let path = b.openedPath { lines.append("\(path) 的修改还没有保存，关闭后会丢失。") }
-            if let t = b.transfer { lines.append("\(t.name) 正在\(t.kind == .upload ? "上传" : "下载")，关闭会取消传输。") }
+            if let t = b.transfer { lines.append("\(t.description)，关闭会取消传输。") }
         }
         if lines.isEmpty, list.contains(where: { $0.session != nil }) { lines.append("终端输出不会保留。") }
         return lines.joined(separator: "\n")
@@ -270,19 +270,19 @@ private struct TabItem: View {
             switch tab {
             case .terminal(let session):
                 StatusDot(state: session.state)
-                Text(session.commandName)
-                    .font(isActive ? Theme.bodyMedium : Theme.body)
-                    .lineLimit(1)
-                serverLabel(session.serverName, production: session.isProduction)
+                if session.isLogin {
+                    // 登录终端不写“登录”两个字，用终端图标表示，标签上只留服务器名。
+                    kindIcon("terminal")
+                    nameLabel(session.serverName, production: session.isProduction)
+                } else {
+                    Text(session.commandName)
+                        .font(isActive ? Theme.bodyMedium : Theme.body)
+                        .lineLimit(1)
+                    serverLabel(session.serverName, production: session.isProduction)
+                }
             case .files(let browser):
-                Image(systemName: browser.transfer == nil ? "folder.fill" : "arrow.up.arrow.down.circle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 10)
-                Text("文件")
-                    .font(isActive ? Theme.bodyMedium : Theme.body)
-                    .lineLimit(1)
-                serverLabel(browser.serverName, production: browser.isProduction)
+                kindIcon(browser.transfer == nil ? "folder" : "arrow.up.arrow.down")
+                nameLabel(browser.serverName, production: browser.isProduction)
                 if browser.isDirty {
                     Circle().fill(Color.orange).frame(width: 6, height: 6)
                         .help("有未保存的修改")
@@ -314,10 +314,30 @@ private struct TabItem: View {
                 Button("重新连接") { model.reconnect(session) }
                 Divider()
             }
+            Button("复制标签") { model.duplicate(tab) }
+                .disabled(tab.session.map { $0.plan == nil } ?? false)
+            Divider()
             Button("关闭") { model.close(tab) }
             Button("关闭其他标签") { model.closeOthers(than: tab) }
             Button("关闭全部标签") { model.closeAll() }
         }
+    }
+
+    /// 标签类型的图标：登录终端、文件。
+    private func kindIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Color.accentColor)
+            .frame(width: 14)
+    }
+
+    /// 没有命令名的标签（登录终端、文件）：服务器名当标题。
+    private func nameLabel(_ name: String, production: Bool) -> some View {
+        Text(name)
+            .font(isActive ? Theme.bodyMedium : Theme.body)
+            .foregroundStyle(production ? Theme.danger : .primary)
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     private func serverLabel(_ name: String, production: Bool) -> some View {
@@ -330,8 +350,8 @@ private struct TabItem: View {
 
     private var title: String {
         switch tab {
-        case .terminal(let s): s.title
-        case .files(let b): "\(b.serverName) / 文件" + (b.listing.map { "：\($0.path)" } ?? "")
+        case .terminal(let s): s.isLogin ? "\(s.serverName)（登录终端）" : s.title
+        case .files(let b): "\(b.serverName)（文件）" + (b.listing.map { "：\($0.path)" } ?? "")
         }
     }
 

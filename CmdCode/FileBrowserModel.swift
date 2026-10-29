@@ -3,6 +3,18 @@ import Foundation
 import Observation
 import SwiftData
 
+/// 服务器间发送文件的目标服务器（由 `AppModel.sendTargets` 生成）。
+struct FileSendTarget: Identifiable {
+    let serverID: PersistentIdentifier
+    let serverName: String
+    let isProduction: Bool
+    let client: RemoteFileClient
+    /// 默认目标目录；空表示登录用户的家目录。
+    var directory: String
+
+    var id: PersistentIdentifier { serverID }
+}
+
 /// 一台服务器的远程文件标签：当前目录、正在查看的文件、上传下载。切换到别的标签再回来时保留。
 @MainActor
 @Observable
@@ -40,6 +52,8 @@ final class FileBrowserModel: Identifiable {
     var pendingDiscard: DiscardAction?
     /// 保存成功等提示（由 AppModel 接到底部提示条）。
     @ObservationIgnored var notify: (String) -> Void = { _ in }
+    /// 往别的服务器（或本服务器另一个目录）写了文件之后通知 AppModel，让显示那个目录的文件标签刷新。
+    @ObservationIgnored var remoteChanged: (PersistentIdentifier, String) -> Void = { _, _ in }
 
     /// 正在进行的上传或下载，同一时间只有一个。
     var transfer: Transfer?
@@ -51,11 +65,35 @@ final class FileBrowserModel: Identifiable {
     var deleteError: String?
 
     struct Transfer {
-        enum Kind { case upload, download }
+        enum Kind {
+            case upload, download
+            /// 发到另一台服务器：先下载到本机临时文件，再上传过去。
+            case send(to: String)
+        }
         var kind: Kind
         var name: String
         var done: Int64 = 0
         var total: Int64
+        /// 发送时：已经下载完、正在上传。
+        var sending = false
+
+        /// “正在上传 a.txt”这样的说明。
+        var description: String {
+            switch kind {
+            case .upload: "正在上传 \(name)"
+            case .download: "正在下载 \(name)"
+            case .send(let server): "正在把 \(name) 发到 \(server)（\(sending ? "第 2 步，上传" : "第 1 步，下载到本机")）"
+            }
+        }
+    }
+
+    /// 发送前要用户确认（覆盖已有文件、目标是生产环境）。
+    struct PendingSend {
+        var source: String
+        var target: FileSendTarget
+        /// 目标的绝对路径。
+        var targetPath: String
+        var exists: Bool
     }
 
     struct PendingUpload {
@@ -332,6 +370,73 @@ final class FileBrowserModel: Identifiable {
             if let dir = listing?.path { go(to: dir) }
             // 覆盖了正在查看的文件：没改过就重新读。
             if pending.target == openedPath, !isDirty { read(pending.target) }
+        }
+    }
+
+    // MARK: 服务器间发送
+
+    /// 正在选择发到哪台服务器的文件路径（显示选择目标的面板）。
+    var choosingSendTarget: String?
+    /// 发送的确认框：覆盖已有文件或目标是生产环境时。
+    var pendingSend: PendingSend?
+    /// 正在检查目标目录（发送前）。
+    private(set) var isCheckingSend = false
+
+    /// 选好目标服务器和目录后：先列一下目标目录（`directory` 为空时是家目录），确认目录存在、看有没有同名文件。
+    func requestSend(_ path: String, to target: FileSendTarget, directory: String) {
+        guard transfer == nil, !isCheckingSend else { return }
+        let name = (path as NSString).lastPathComponent
+        let dir = directory.trimmingCharacters(in: .whitespacesAndNewlines)
+        isCheckingSend = true
+        Task {
+            defer { isCheckingSend = false }
+            do {
+                let listing = try await target.client.list(directory: dir.isEmpty || dir == "~" ? nil : dir)
+                let pending = PendingSend(source: path, target: target, targetPath: RemoteFileScript.join(listing.path, name),
+                                          exists: listing.entries.contains { $0.name == name })
+                if target.serverID == serverID, pending.targetPath == path {
+                    transferError = ("不能发送", "目标就是这个文件本身：\(path)")
+                } else if pending.exists || target.isProduction {
+                    pendingSend = pending
+                } else {
+                    send(pending)
+                }
+            } catch {
+                transferError = ("发送失败", "\(target.serverName)：\(Self.message(error))")
+            }
+        }
+    }
+
+    /// 下载到本机临时目录，再上传到目标服务器，最后删掉临时文件。目标已存在时覆盖（确认框里已问过）。
+    func send(_ pending: PendingSend) {
+        pendingSend = nil
+        guard transfer == nil else { return }
+        let name = (pending.source as NSString).lastPathComponent
+        transfer = Transfer(kind: .send(to: pending.target.serverName), name: name, total: 0)
+        let client = client
+        transferTask = Task {
+            let temp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("cmdcode-send-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: temp) }
+            do {
+                try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])
+                let local = temp.appendingPathComponent(name)
+                try await client.download(path: pending.source, to: local, progress: progressHandler())
+                try Task.checkCancellation()
+                transfer?.sending = true
+                transfer?.done = 0
+                try await pending.target.client.upload(from: local, to: pending.targetPath, overwrite: pending.exists,
+                                                       progress: progressHandler())
+                notify("已发到 \(pending.target.serverName)：\(pending.targetPath)")
+                if let dir = RemoteFileScript.parent(of: pending.targetPath) { remoteChanged(pending.target.serverID, dir) }
+            } catch is CancellationError {
+            } catch RemoteFileError.alreadyExists {
+                transferError = ("发送失败", "\(pending.target.serverName) 上已经有 \(pending.targetPath)，请重新发送并确认覆盖。")
+            } catch {
+                transferError = ("发送失败", Self.message(error))
+            }
+            transfer = nil
         }
     }
 

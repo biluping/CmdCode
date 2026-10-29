@@ -64,6 +64,16 @@ struct CmdCodeApp: App {
                 Button("关闭标签") { model.closeActiveTab() }
                     .keyboardShortcut("w")
             }
+            // 查找：交给当前焦点所在的视图——终端用 SwiftTerm 自带的查找栏，文件编辑器用系统查找栏。
+            CommandGroup(after: .pasteboard) {
+                Divider()
+                Button("查找…") { TextFinder.send(.showFindInterface) }
+                    .keyboardShortcut("f")
+                Button("查找下一个") { TextFinder.send(.nextMatch) }
+                    .keyboardShortcut("g")
+                Button("查找上一个") { TextFinder.send(.previousMatch) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+            }
             CommandGroup(before: .sidebar) {
                 Button("显示/隐藏侧栏") { model.toggleSidebar() }
                     .keyboardShortcut("s", modifiers: [.command, .control])
@@ -76,6 +86,16 @@ struct CmdCodeApp: App {
                 Divider()
             }
         }
+    }
+}
+
+/// 把查找动作发给响应链。`performTextFinderAction` 按发送者菜单项的 tag 区分动作，所以临时造一个菜单项。
+@MainActor
+enum TextFinder {
+    static func send(_ action: NSTextFinder.Action) {
+        let item = NSMenuItem()
+        item.tag = action.rawValue
+        NSApp.sendAction(#selector(NSResponder.performTextFinderAction(_:)), to: nil, from: item)
     }
 }
 

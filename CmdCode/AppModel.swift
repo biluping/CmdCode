@@ -32,6 +32,15 @@ enum WorkspaceTab: Identifiable {
     }
 }
 
+/// 新开的终端或文件标签放在哪里。
+enum TabPlacement {
+    case append
+    /// 原位替换（重新运行、重连）。
+    case replace(UUID)
+    /// 放在这个标签后面（复制标签）。
+    case after(UUID)
+}
+
 /// 弹出的编辑表单。
 enum SheetRoute: Identifiable {
     case newServer(group: ServerGroup?)
@@ -95,8 +104,8 @@ final class AppModel {
     var pendingDeletion: PendingDeletion?
     /// 等待确认的执行。
     var pendingExecution: ExecutionPlan?
-    /// 确认后要替换掉的会话（“重新运行”时）。
-    @ObservationIgnored private var pendingReplacement: TerminalSession.ID?
+    /// 确认后新标签放在哪里（“重新运行”替换原标签，“复制标签”放在原标签后面）。
+    @ObservationIgnored private var pendingPlacement: TabPlacement = .append
     /// 等待确认的执行属于哪台服务器（终端右键“浏览文件”用）。
     @ObservationIgnored private var pendingServerID: PersistentIdentifier?
     /// 右侧的标签，按打开顺序。
@@ -162,45 +171,54 @@ final class AppModel {
         }
     }
 
-    private func prepare(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, replacing: TerminalSession.ID? = nil) {
+    private func prepare(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, placement: TabPlacement = .append) {
         if plan.requiresConfirmation {
-            pendingReplacement = replacing
+            pendingPlacement = placement
             pendingServerID = serverID
             pendingExecution = plan
         } else {
-            execute(plan, serverID: serverID, replacing: replacing)
+            execute(plan, serverID: serverID, placement: placement)
         }
     }
 
     /// 确认框点了“执行”。
     func confirmExecution(_ plan: ExecutionPlan) {
-        let replacing = pendingReplacement
+        let placement = pendingPlacement
         let serverID = pendingServerID
-        pendingReplacement = nil
+        pendingPlacement = .append
         pendingServerID = nil
-        execute(plan, serverID: serverID, replacing: replacing)
+        execute(plan, serverID: serverID, placement: placement)
     }
 
-    /// 在内嵌终端里新开一个标签执行；`replacing` 指定时原位替换那个标签（重新运行）。
-    private func execute(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, replacing: TerminalSession.ID? = nil) {
+    /// 在内嵌终端里开一个标签执行。
+    private func execute(_ plan: ExecutionPlan, serverID: PersistentIdentifier?, placement: TabPlacement = .append) {
         pendingExecution = nil
         perform {
             let session = TerminalSession(plan: plan, invocation: try runner.invocation(for: plan))
             session.serverID = serverID
-            open(session, replacing: replacing)
+            open(session, placement: placement)
         }
     }
 
-    func open(_ session: TerminalSession, replacing: TerminalSession.ID? = nil) {
-        if let replacing, let index = tabs.firstIndex(where: { $0.id == replacing }) {
+    func open(_ session: TerminalSession, placement: TabPlacement = .append) {
+        if case .replace(let id) = placement, let index = tabs.firstIndex(where: { $0.id == id }) {
             tabs[index].session?.hangUp()
             tabs[index] = .terminal(session)
         } else {
-            tabs.append(.terminal(session))
+            insert(.terminal(session), placement: placement)
         }
         activeTabID = session.id
         selection = .tabs
         session.start()
+    }
+
+    /// 新标签放到末尾，或者放在 `.after` 指定的标签后面（找不到时放末尾）。
+    private func insert(_ tab: WorkspaceTab, placement: TabPlacement) {
+        if case .after(let id) = placement, let index = tabs.firstIndex(where: { $0.id == id }) {
+            tabs.insert(tab, at: index + 1)
+        } else {
+            tabs.append(tab)
+        }
     }
 
     // MARK: 远程文件
@@ -211,7 +229,7 @@ final class AppModel {
         fileBrowsers.first { $0.serverID == server.persistentModelID }
     }
 
-    /// 打开服务器的文件标签；每台服务器一个，已经打开的切过去，目录和编辑内容都保留。
+    /// 打开服务器的文件标签；已经打开的切过去（“复制标签”复制出来的有多个时切到第一个），目录和编辑内容都保留。
     /// 给了 `directory`（终端右键“浏览文件”）时跳到这个目录，打开中的文件不受影响。
     func openFiles(_ server: Server, directory: String? = nil) {
         perform {
@@ -222,14 +240,57 @@ final class AppModel {
                 if let directory { browser.go(to: directory) }
                 activeTabID = browser.id
             } else {
-                let browser = FileBrowserModel(
-                    client: client, serverID: server.persistentModelID, serverName: server.name,
-                    isProduction: server.isProduction,
-                    initialDirectory: directory ?? ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
-                browser.notify = { [weak self] in self?.showToast($0) }
-                tabs.append(.files(browser))
-                activeTabID = browser.id
+                addFileBrowser(client: client, serverID: server.persistentModelID, serverName: server.name,
+                               isProduction: server.isProduction,
+                               directory: directory ?? ScriptBuilder.normalizedWorkingDirectory(server.workingDirectory))
             }
+            selection = .tabs
+        }
+    }
+
+    private func addFileBrowser(client: RemoteFileClient, serverID: PersistentIdentifier, serverName: String,
+                                isProduction: Bool, directory: String?, placement: TabPlacement = .append) {
+        let browser = FileBrowserModel(client: client, serverID: serverID, serverName: serverName,
+                                       isProduction: isProduction, initialDirectory: directory)
+        browser.notify = { [weak self] in self?.showToast($0) }
+        browser.remoteChanged = { [weak self] id, dir in self?.refreshFileBrowsers(serverID: id, directory: dir) }
+        insert(.files(browser), placement: placement)
+        activeTabID = browser.id
+    }
+
+    /// 别的标签往这台服务器的 `directory` 里写了文件（服务器间发送）：正显示这个目录的文件标签刷新列表。
+    private func refreshFileBrowsers(serverID: PersistentIdentifier, directory: String) {
+        for b in fileBrowsers where b.serverID == serverID && b.listing?.path == directory && !b.isListing {
+            b.go(to: directory)
+        }
+    }
+
+    /// 服务器间发送文件的目标：所有服务器；目录默认取它已打开的文件标签当前所在的目录，否则是工作目录（空表示家目录）。
+    func sendTargets() -> [FileSendTarget] {
+        library.allServers().compactMap { s in
+            guard let client = try? makeFileClient(s.sshTarget()) else { return nil }
+            let dir = fileBrowser(for: s)?.listing?.path ?? ScriptBuilder.normalizedWorkingDirectory(s.workingDirectory)
+            return FileSendTarget(serverID: s.persistentModelID, serverName: s.name, isProduction: s.isProduction,
+                                  client: client, directory: dir ?? "")
+        }
+    }
+
+    // MARK: 复制标签
+
+    /// 标签右键“复制标签”：在原标签后面再开一个同样的。
+    /// 登录终端从远端 shell 最后所在的目录重新登录；命令终端再执行一次（照常先确认）；文件标签打开同一个目录。
+    func duplicate(_ tab: WorkspaceTab) {
+        switch tab {
+        case .terminal(let session):
+            guard var plan = session.plan else { return }
+            if session.isLogin, let dir = ScriptBuilder.normalizedWorkingDirectory(session.currentDirectory) {
+                plan.workingDirectory = dir
+            }
+            prepare(plan, serverID: session.serverID, placement: .after(session.id))
+        case .files(let b):
+            addFileBrowser(client: b.client, serverID: b.serverID, serverName: b.serverName,
+                           isProduction: b.isProduction, directory: b.listing?.path ?? b.initialDirectory,
+                           placement: .after(b.id))
             selection = .tabs
         }
     }
@@ -318,12 +379,12 @@ final class AppModel {
 
     private func removeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        if let b = tabs[index].browser {
-            // 文件标签关了就不再需要这台服务器的复用连接。
+        let closed = tabs.remove(at: index)
+        if let b = closed.browser, !fileBrowsers.contains(where: { $0.serverID == b.serverID }) {
+            // 这台服务器的文件标签都关了，就不再需要它的复用连接。
             let client = b.client
             Task.detached { client.closeSharedConnection() }
         }
-        tabs.remove(at: index)
         if activeTabID == id {
             activeTabID = tabs.indices.contains(index) ? tabs[index].id : tabs.last?.id
         }
@@ -337,7 +398,7 @@ final class AppModel {
     /// 重新运行：生产环境照常先确认，确认后在原标签里重新开始。
     func rerun(_ session: TerminalSession) {
         guard let plan = session.plan else { return }
-        prepare(plan, serverID: session.serverID, replacing: session.id)
+        prepare(plan, serverID: session.serverID, placement: .replace(session.id))
     }
 
     /// 等待确认的重连（还连着时重连会断开当前连接）。
@@ -353,7 +414,7 @@ final class AppModel {
         pendingReconnect = nil
         guard var plan = session.plan, tabs.contains(where: { $0.id == session.id }) else { return }
         if let dir = ScriptBuilder.normalizedWorkingDirectory(session.currentDirectory) { plan.workingDirectory = dir }
-        prepare(plan, serverID: session.serverID, replacing: session.id)
+        prepare(plan, serverID: session.serverID, placement: .replace(session.id))
     }
 
 
@@ -375,7 +436,7 @@ final class AppModel {
                 try library.deleteGroup(g)
             case .server(let s, _):
                 if selection == .server(s.persistentModelID) { selection = nil }
-                if let b = fileBrowser(for: s) {
+                for b in fileBrowsers where b.serverID == s.persistentModelID {
                     b.cancelTransfer()
                     removeTab(b.id)
                 }

@@ -1,9 +1,11 @@
 import AppKit
 import CmdCodeCore
+import SwiftData
 import SwiftUI
 
 /// 文件标签的内容（标签栏由 `TerminalPane` 提供）：上面路径栏，左边目录列表，右边查看和编辑文件内容。
 struct FileBrowserView: View {
+    @Environment(AppModel.self) private var model
     let server: Server
     @Bindable var browser: FileBrowserModel
 
@@ -21,6 +23,21 @@ struct FileBrowserView: View {
             }
         }
         .onAppear { browser.start() }
+        .sheet(item: Binding(get: { browser.choosingSendTarget.map(SendRequest.init) },
+                             set: { browser.choosingSendTarget = $0?.path })) { request in
+            SendFileSheet(path: request.path, sourceServerID: browser.serverID, targets: model.sendTargets()) { target, dir in
+                browser.requestSend(request.path, to: target, directory: dir)
+            }
+        }
+        .alert(sendTitle, isPresented: isPresent($browser.pendingSend), presenting: browser.pendingSend) { pending in
+            Button(pending.exists ? "覆盖" : "发送", role: .destructive) { browser.send(pending) }
+                .keyboardShortcut(.defaultAction)
+            Button("取消", role: .cancel) {}
+        } message: { pending in
+            Text(pending.exists
+                 ? "\(pending.target.serverName) 上已有 \(pending.targetPath)，覆盖后原内容无法恢复（权限和属主保持不变）。"
+                 : "\(pending.target.serverName)：\(pending.targetPath)")
+        }
         .alert("放弃未保存的修改？", isPresented: isPresent($browser.pendingDiscard)) {
             Button("放弃修改", role: .destructive) { browser.confirmDiscard() }
             Button("取消", role: .cancel) {}
@@ -69,6 +86,15 @@ struct FileBrowserView: View {
         } message: {
             Text(browser.deleteError ?? "")
         }
+    }
+
+    private var sendTitle: String {
+        guard let pending = browser.pendingSend else { return "" }
+        let name = (pending.targetPath as NSString).lastPathComponent
+        if pending.exists {
+            return pending.target.isProduction ? "覆盖生产环境服务器上的“\(name)”？" : "覆盖“\(name)”？"
+        }
+        return "发送到生产环境服务器？"
     }
 
     private var deleteTitle: String {
@@ -145,6 +171,8 @@ private struct DirectoryList: View {
                 if let url = FilePanels.chooseDownloadDestination(name: entry.name) { browser.download(path, to: url) }
             }
             .disabled(browser.transfer != nil)
+            Button("发送到其他服务器…") { browser.choosingSendTarget = path }
+                .disabled(browser.transfer != nil || browser.isCheckingSend)
             Divider()
         }
         Button("复制路径") {
@@ -333,6 +361,10 @@ private struct FilePreview: View {
                 .buttonStyle(IconButtonStyle())
                 .help("下载到本地")
                 .disabled(browser.transfer != nil)
+            Button { browser.choosingSendTarget = path } label: { Image(systemName: "paperplane") }
+                .buttonStyle(IconButtonStyle())
+                .help("发送到其他服务器")
+                .disabled(browser.transfer != nil || browser.isCheckingSend)
             Button { browser.requestDelete(path) } label: { Image(systemName: "trash") }
                 .buttonStyle(IconButtonStyle())
                 .help("删除这个文件（会先确认）")
@@ -399,9 +431,9 @@ private struct TransferBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: transfer.kind == .upload ? "arrow.up.circle" : "arrow.down.circle")
+            Image(systemName: icon)
                 .foregroundStyle(Color.accentColor)
-            Text("\(transfer.kind == .upload ? "正在上传" : "正在下载") \(transfer.name)")
+            Text(transfer.description)
                 .font(Theme.body)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -421,8 +453,98 @@ private struct TransferBar: View {
         .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
 
+    private var icon: String {
+        switch transfer.kind {
+        case .upload: "arrow.up.circle"
+        case .download: "arrow.down.circle"
+        case .send: "paperplane.circle"
+        }
+    }
+
     private func bytes(_ n: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: n, countStyle: .file)
+    }
+}
+
+// MARK: - 发送到其他服务器
+
+private struct SendRequest: Identifiable {
+    let path: String
+    var id: String { path }
+}
+
+/// 选择目标服务器和目录。目录默认取目标服务器已打开的文件标签所在目录，否则是它的工作目录，空表示家目录。
+private struct SendFileSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let path: String
+    let sourceServerID: PersistentIdentifier
+    let targets: [FileSendTarget]
+    let onSend: (FileSendTarget, String) -> Void
+    @State private var selected: PersistentIdentifier?
+    @State private var directory = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("发送到其他服务器").font(.system(size: 15, weight: .semibold))
+            Text(path)
+                .font(Theme.mono)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("目标服务器").font(Theme.bodyMedium)
+                Picker("目标服务器", selection: $selected) {
+                    ForEach(targets) { t in
+                        Text(t.serverID == sourceServerID ? "\(t.serverName)（当前服务器）" : t.serverName)
+                            .foregroundStyle(t.isProduction ? Theme.danger : .primary)
+                            .tag(Optional(t.serverID))
+                    }
+                }
+                .labelsHidden()
+                .onChange(of: selected) { directory = target?.directory ?? "" }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("目标目录").font(Theme.bodyMedium)
+                TextField("留空表示家目录", text: $directory)
+                    .textFieldStyle(.roundedBorder)
+                    .font(Theme.mono)
+                    .onSubmit(submit)
+                Text("先下载到本机临时目录再上传过去，传完删除临时文件；同名文件会先确认是否覆盖。")
+                    .font(Theme.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if target?.isProduction == true {
+                Label("目标是生产环境服务器，发送前会再确认一次", systemImage: "exclamationmark.triangle.fill")
+                    .font(Theme.small)
+                    .foregroundStyle(Theme.danger)
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("发送", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(target == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .onAppear {
+            // 默认选第一台别的服务器。
+            selected = (targets.first { $0.serverID != sourceServerID } ?? targets.first)?.serverID
+            directory = target?.directory ?? ""
+        }
+    }
+
+    private var target: FileSendTarget? {
+        targets.first { $0.serverID == selected }
+    }
+
+    private func submit() {
+        guard let target else { return }
+        dismiss()
+        onSend(target, directory)
     }
 }
 

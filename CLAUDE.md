@@ -53,7 +53,7 @@ swift run cmdcode-import --dry-run                                              
 - `AppModel.swift`：`@Observable` 的界面状态与动作中心——左侧栏选择（`SidebarSelection`）、弹出表单（`SheetRoute`）、执行确认、右侧标签页（`tabs`）。数据改动一律调用 `Library`，执行一律调用 `CommandRunner`。
 - 右侧标签页：`AppModel.tabs` 是 `WorkspaceTab`（`.terminal(TerminalSession)` 或 `.files(FileBrowserModel)`）的数组，`TerminalPane.swift` 画统一的标签栏并按类型显示内容。
 - `TerminalSession.swift`：每次执行一个 `TerminalSession`（SwiftTerm 视图 + pty 里的 ssh 进程）；关闭标签给进程组发 SIGHUP。右键菜单（复制、粘贴、浏览文件）在 `CmdTerminalView.menu(for:)`；浏览文件跳到远端 shell 经 OSC 7 上报的当前目录（`ScriptBuilder.reportDirectoryLine`）。输出不保存。
-- `FileBrowserModel.swift` / `FileBrowserView.swift`：文件标签，每台服务器一个（按 `serverID` 查找），切走再回来保留目录和编辑内容。`-snapshot` 时 `AppModel.makeFileClient` 换成本地假 ssh。
+- `FileBrowserModel.swift` / `FileBrowserView.swift`：文件标签，通常每台服务器一个（按 `serverID` 查找；“复制标签”可以复制出多个，复用连接等这台服务器的文件标签全关了才关），切走再回来保留目录和编辑内容。服务器间发送文件是先下载到本机临时目录再上传（`FileBrowserModel.send`）。`-snapshot` 时 `AppModel.makeFileClient` 换成本地假 ssh。
 - `SidebarView.swift`：三层树（分组 → 服务器 → 命令）、拖动排序、右键菜单、原地重命名分组。`DetailView` 是服务器详情，`CredentialsView` 是密码管理，`SearchPanel` 是 ⌘K 搜索，`ExecutionConfirmView` 是执行确认面板（所有命令都先确认，生产环境红色强调），`Forms.swift` 是各编辑表单，`Theme.swift` 是统一的颜色和控件样式。
 
 ## 工作方式

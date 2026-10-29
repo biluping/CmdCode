@@ -152,6 +152,39 @@ enum Snapshot {
             ("21-tabs-files-dirty", {
                 model.fileBrowser(for: seed.lims232)?.draft += "echo deployed\n"
             }),
+            ("21b-tabs-duplicated", {
+                if let b = model.fileBrowser(for: seed.lims232) { model.duplicate(.files(b)) }
+            }),
+            ("21c-files-send-sheet", {
+                model.activeTab?.browser?.choosingSendTarget = filesDir + "/build.sh"
+            }),
+            ("21d-files-sending", {
+                let browser = model.activeTab?.browser
+                browser?.choosingSendTarget = nil
+                browser?.transfer = .init(kind: .send(to: "135 - lims"), name: "lims-web-2.3.1.jar",
+                                          done: 9_400_000, total: 24_800_000, sending: true)
+            }),
+            ("21e-files-send-confirm", {
+                let browser = model.activeTab?.browser
+                browser?.transfer = nil
+                if let target = model.sendTargets().first(where: { $0.serverID == seed.lims135.persistentModelID }) {
+                    browser?.pendingSend = .init(source: filesDir + "/build.sh", target: target,
+                                                 targetPath: "/opt/lims/build.sh", exists: true)
+                }
+            }),
+            ("21f-terminal-find", {
+                model.activeTab?.browser?.pendingSend = nil
+                guard let build = model.sessions.first(where: { $0.commandName == "构建" }) else { return }
+                model.activeTabID = build.id
+                let find = NSPasteboard(name: .find)
+                find.clearContents()
+                find.setString("SUCCESS", forType: .string)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    let item = NSMenuItem()
+                    item.tag = NSTextFinder.Action.showFindInterface.rawValue
+                    build.view.performTextFinderAction(item)
+                }
+            }),
             ("22-sidebar-hidden-tabs", { model.isSidebarVisible = false }),
             ("23-sidebar-hidden-server", { model.showServer(seed.lims232) }),
             ("24-sidebar-shown", {
