@@ -159,7 +159,7 @@ struct FileBrowserView: View {
 // MARK: - 目录列表
 
 private struct DirectoryList: View {
-    let browser: FileBrowserModel
+    @Bindable var browser: FileBrowserModel
     /// 正有文件拖到列表上方。
     @State private var isDropTargeted = false
 
@@ -187,53 +187,59 @@ private struct DirectoryList: View {
     }
 
     var body: some View {
-        Group {
-            if let error = browser.listError {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("打开目录失败", systemImage: "exclamationmark.triangle.fill")
-                        .font(Theme.bodyMedium)
-                        .foregroundStyle(Theme.danger)
-                    Text(error)
-                        .font(Theme.mono)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    Button("重试") { browser.goToInput() }
-                        .buttonStyle(PillButtonStyle())
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else if let listing = browser.listing {
-                if listing.entries.isEmpty {
-                    EmptyHint(text: "空目录").padding(16)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 1) {
-                            ForEach(listing.entries) { entry in
-                                EntryRow(entry: entry,
-                                         selected: browser.openedPath == RemoteFileScript.join(listing.path, entry.name)) {
-                                    browser.open(entry)
-                                }
-                                .contextMenu { menu(for: entry, in: listing.path) }
-                            }
-                        }
-                        .padding(6)
+        VStack(spacing: 0) {
+            DirectorySearchField(text: $browser.nameFilter)
+                .padding(8)
+                .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
+            Group {
+                if let error = browser.listError {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("打开目录失败", systemImage: "exclamationmark.triangle.fill")
+                            .font(Theme.bodyMedium)
+                            .foregroundStyle(Theme.danger)
+                        Text(error)
+                            .font(Theme.mono)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Button("重试") { browser.goToInput() }
+                            .buttonStyle(PillButtonStyle())
                     }
-                    .opacity(browser.isListing ? 0.5 : 1)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else if let listing = browser.listing {
+                    let entries = browser.visibleEntries
+                    if entries.isEmpty {
+                        EmptyHint(text: listing.entries.isEmpty ? "空目录" : "没有匹配的文件或目录").padding(16)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 1) {
+                                ForEach(entries) { entry in
+                                    EntryRow(entry: entry,
+                                             selected: browser.openedPath == RemoteFileScript.join(listing.path, entry.name)) {
+                                        browser.open(entry)
+                                    }
+                                    .contextMenu { menu(for: entry, in: listing.path) }
+                                }
+                            }
+                            .padding(6)
+                        }
+                        .opacity(browser.isListing ? 0.5 : 1)
+                    }
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            // 从 Finder 拖文件进来上传到当前目录。
+            .dropDestination(for: URL.self) { urls, _ in
+                browser.requestDroppedUpload(urls)
+            } isTargeted: { isDropTargeted = $0 && browser.listing != nil }
+            .overlay { if isDropTargeted { dropHint } }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-        // 从 Finder 拖文件进来上传到当前目录。
-        .dropDestination(for: URL.self) { urls, _ in
-            browser.requestDroppedUpload(urls)
-        } isTargeted: { isDropTargeted = $0 && browser.listing != nil }
-        .overlay { if isDropTargeted { dropHint } }
     }
 
     private var dropHint: some View {
@@ -247,6 +253,39 @@ private struct DirectoryList: View {
             }
             .padding(4)
             .allowsHitTesting(false)
+    }
+}
+
+/// 当前目录的文件名搜索：Esc 或右侧按钮清空。
+private struct DirectorySearchField: View {
+    @Binding var text: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.faint)
+            TextField("搜索当前目录", text: $text)
+                .textFieldStyle(.plain)
+                .font(Theme.body)
+                .focused($focused)
+                .onExitCommand { text = "" }
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.faint)
+                .focusable(false)
+                .help("清空")
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(Theme.subtleFill, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(focused ? Color.accentColor.opacity(0.6) : Theme.border))
     }
 }
 

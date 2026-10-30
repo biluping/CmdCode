@@ -34,6 +34,15 @@ final class FileBrowserModel: Identifiable {
     private(set) var listError: String?
     /// 路径栏里的文字，可以编辑后回车跳转。
     var pathInput = ""
+    /// 当前目录列表的文件名搜索词；切换目录时清空。
+    var nameFilter = ""
+
+    /// 当前目录里匹配搜索词的条目；忽略大小写。
+    var visibleEntries: [RemoteFileEntry] {
+        guard let listing else { return [] }
+        let query = nameFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        return query.isEmpty ? listing.entries : listing.entries.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
 
     private(set) var openedPath: String?
     private(set) var content: RemoteFileContent?
@@ -130,6 +139,7 @@ final class FileBrowserModel: Identifiable {
     /// 打开目录；nil 表示家目录。后发起的请求会让先前未完成的结果作废。
     func go(to directory: String?) {
         listTask?.cancel()
+        nameFilter = ""
         isListing = true
         listError = nil
         let client = client

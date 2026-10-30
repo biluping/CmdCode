@@ -137,7 +137,6 @@ struct TerminalPane: View {
                 .buttonStyle(IconButtonStyle())
                 .help("浏览文件（跳到终端当前所在的目录）")
         }
-        moreMenu(closing: .terminal(session))
     }
 
     @ViewBuilder
@@ -146,29 +145,7 @@ struct TerminalPane: View {
             Button { model.openTerminal(server, directory: browser.listing?.path) } label: { Image(systemName: "terminal") }
                 .buttonStyle(IconButtonStyle())
                 .help(model.terminal(for: server) == nil ? "登录服务器（新开终端标签）" : "切到这台服务器的终端标签")
-            moreMenu(closing: .files(browser)) {
-                Button("新开终端登录") { model.login(server, directory: browser.listing?.path) }
-                Divider()
-            }
-        } else {
-            moreMenu(closing: .files(browser))
         }
-    }
-
-    private func moreMenu(closing tab: WorkspaceTab, @ViewBuilder extra: () -> some View = { EmptyView() }) -> some View {
-        Menu {
-            extra()
-            Button("关闭当前标签") { model.close(tab) }
-            Button("关闭全部标签") { model.closeAll() }
-            Button("关闭已结束的终端") { model.closeFinished() }
-                .disabled(!model.sessions.contains { !$0.state.isRunning })
-        } label: {
-            Image(systemName: "ellipsis")
-        }
-        .menuStyle(.button)
-        .buttonStyle(IconButtonStyle())
-        .menuIndicator(.hidden)
-        .fixedSize()
     }
 
     private var empty: some View {

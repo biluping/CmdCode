@@ -100,13 +100,22 @@ enum Snapshot {
             }),
             ("16-files-dirty", {
                 let browser = model.fileBrowser(for: seed.lims232)
+                browser?.nameFilter = ""
                 browser?.draft.replace("root: INFO", with: "root: WARN")
                 browser?.transfer = .init(kind: .upload, name: "lims-web-2.3.1.jar", done: 9_400_000, total: 24_800_000)
             }),
+            ("16b-files-search", {
+                model.fileBrowser(for: seed.lims232)?.nameFilter = "YML"
+            }),
+            ("16c-files-search-none", {
+                model.fileBrowser(for: seed.lims232)?.nameFilter = "没有这个"
+            }),
             ("17-files-conflict", {
                 // 模拟别人在打开之后改了文件
+                let browser = model.fileBrowser(for: seed.lims232)
+                browser?.nameFilter = ""
                 try? "changed by someone\n".write(toFile: filesDir + "/application.yml", atomically: false, encoding: .utf8)
-                model.fileBrowser(for: seed.lims232)?.requestSave()
+                browser?.requestSave()
             }),
             ("18-files-upload-overwrite", {
                 let browser = model.fileBrowser(for: seed.lims232)
