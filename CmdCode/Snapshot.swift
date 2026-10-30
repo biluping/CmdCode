@@ -52,6 +52,8 @@ enum Snapshot {
         try? await Task.sleep(for: .seconds(1))
         guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) else { return }
         window.setContentSize(NSSize(width: 1180, height: 760))
+        // 截图覆盖展开侧栏的典型界面；应用实际启动时默认收起。
+        model.isSidebarVisible = true
 
         let (filesDir, fakeSSH) = makeFileFixture()
         model.makeFileClient = { RemoteFileClient(target: $0, sshPath: fakeSSH) }

@@ -120,8 +120,8 @@ final class AppModel {
     var alert: AppAlert?
     /// 底部的短暂提示，比如“已复制密码”。
     var toast: String?
-    /// 左侧栏是否显示（⌃⌘S 或顶部的侧栏按钮切换）。不持久化，每次启动都显示。
-    var isSidebarVisible = true
+    /// 左侧栏是否显示（⌃⌘S 或顶部的侧栏按钮切换）。不持久化，每次启动都收起。
+    var isSidebarVisible = false
     /// 主窗口是否置顶。不持久化，每次启动恢复为普通窗口。
     var isWindowPinned = false
     /// 左侧栏的展开状态。不持久化，每次启动全部折叠。
