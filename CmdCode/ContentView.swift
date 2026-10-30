@@ -47,6 +47,7 @@ struct ContentView: View {
         }
         .animation(.easeOut(duration: 0.15), value: model.isSearching)
         .onAppear { model.reopenWindow = { openWindow(id: "main") } }
+        .background(WindowLevelController(isPinned: model.isWindowPinned))
         .animation(.spring(duration: 0.3), value: model.toast)
         .sheet(item: $model.sheet) { route in
             SheetContent(route: route)

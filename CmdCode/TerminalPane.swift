@@ -112,6 +112,7 @@ struct TerminalPane: View {
             case .files(let browser): actions(for: browser)
             case nil: EmptyView()
             }
+            WindowPinButton()
         }
         .padding(.trailing, 10)
         .frame(height: 44)

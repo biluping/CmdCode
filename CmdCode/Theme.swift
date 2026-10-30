@@ -327,6 +327,7 @@ struct ContentHeader<Actions: View>: View {
                 .lineLimit(1)
             Spacer()
             actions
+            WindowPinButton()
         }
         .padding(.horizontal, 16)
         .frame(height: 44)
@@ -344,6 +345,31 @@ struct SidebarToggleButton: View {
             .buttonStyle(IconButtonStyle())
             .focusable(false)
             .help(model.isSidebarVisible ? "隐藏侧栏（⌃⌘S）" : "显示侧栏（⌃⌘S）")
+    }
+}
+
+/// 主窗口置顶开关：开启后用浮动窗口层级，显示在其他普通窗口上方。
+struct WindowPinButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button { model.isWindowPinned.toggle() } label: {
+            Image(systemName: model.isWindowPinned ? "pin.fill" : "pin")
+        }
+        .buttonStyle(IconButtonStyle(tint: model.isWindowPinned ? .accentColor : .secondary))
+        .focusable(false)
+        .help(model.isWindowPinned ? "取消窗口置顶" : "窗口置顶")
+    }
+}
+
+/// 把 SwiftUI 里的置顶状态同步到它所在的主窗口。
+struct WindowLevelController: NSViewRepresentable {
+    let isPinned: Bool
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        view.window?.level = isPinned ? .floating : .normal
     }
 }
 

@@ -208,6 +208,7 @@ enum Snapshot {
                 model.expandedServers.removeAll()
                 model.locate(seed.lims135)
             }),
+            ("28-window-pinned", { model.isWindowPinned = true }),
         ]
 
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
@@ -225,6 +226,7 @@ enum Snapshot {
                 if let sheet = window.attachedSheet {
                     capture(sheet, to: "\(directory)/\(name)-sheet-\(suffix).png")
                 }
+                model.isWindowPinned = false
             }
             model.sheet = nil
             model.toast = nil
