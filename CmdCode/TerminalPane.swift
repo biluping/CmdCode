@@ -96,14 +96,20 @@ struct TerminalPane: View {
             CollapsedSidebarLeading()
                 .padding(.leading, 16)
                 .padding(.trailing, -8)
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    TabStrip()
-                        .padding(.horizontal, 8)
-                }
-                .scrollIndicators(.never)
-                .onChange(of: model.activeTabID) {
-                    if let id = model.activeTabID { withAnimation { proxy.scrollTo(id) } }
+            // 滚动区会撑满标签右边的空白，拖动窗口的区域要垫在滚动内容后面并铺满可见宽度。
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        TabStrip()
+                            .padding(.horizontal, 8)
+                            .fixedSize()
+                            .frame(minWidth: geometry.size.width, minHeight: geometry.size.height, alignment: .leading)
+                            .background(WindowDragArea())
+                    }
+                    .scrollIndicators(.never)
+                    .onChange(of: model.activeTabID) {
+                        if let id = model.activeTabID { withAnimation { proxy.scrollTo(id) } }
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -244,18 +250,19 @@ private struct TabItem: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 5) {
             switch tab {
             case .terminal(let session):
-                StatusDot(state: session.state)
+                // 终端图标同时表示连接状态：还连着绿色，结束后红色。
+                kindIcon("terminal", tint: session.state.isRunning ? Theme.success : Theme.danger)
                 if session.isLogin {
                     // 登录终端不写“登录”两个字，用终端图标表示，标签上只留服务器名。
-                    kindIcon("terminal")
                     nameLabel(session.serverName, production: session.isProduction)
                 } else {
                     Text(session.commandName)
-                        .font(isActive ? Theme.bodyMedium : Theme.body)
+                        .font(isActive ? Theme.small.weight(.medium) : Theme.small)
                         .lineLimit(1)
+                        .frame(maxWidth: 90)
                     serverLabel(session.serverName, production: session.isProduction)
                 }
             case .files(let browser):
@@ -269,14 +276,14 @@ private struct TabItem: View {
             Button { model.close(tab) } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
             }
-            .buttonStyle(IconButtonStyle(size: 18))
+            .buttonStyle(IconButtonStyle(size: 16))
             .opacity(hovering || isActive ? 1 : 0)
             .help(closeHelp)
         }
-        .padding(.leading, 10)
+        .padding(.leading, 8)
         .padding(.trailing, 4)
-        .frame(height: 30)
-        .frame(maxWidth: 280)
+        .frame(height: 28)
+        .frame(maxWidth: 220)
         .background(RoundedRectangle(cornerRadius: 7)
             .fill(isActive ? Theme.selected : hovering ? Theme.hover : .clear))
         .contentShape(Rectangle())
@@ -284,6 +291,9 @@ private struct TabItem: View {
         .onTapGesture { model.activeTabID = tab.id }
         .help(title)
         .contextMenu {
+            Button("复制标签") { model.duplicate(tab) }
+                .disabled(tab.session.map { $0.plan == nil } ?? false)
+            Divider()
             if let session = tab.session, let plan = session.plan, !plan.command.isEmpty {
                 Button("重新运行") { model.rerun(session) }
                 Divider()
@@ -292,9 +302,6 @@ private struct TabItem: View {
                 Button("重新连接") { model.reconnect(session) }
                 Divider()
             }
-            Button("复制标签") { model.duplicate(tab) }
-                .disabled(tab.session.map { $0.plan == nil } ?? false)
-            Divider()
             Button("关闭") { model.close(tab) }
             Button("关闭其他标签") { model.closeOthers(than: tab) }
             Button("关闭全部标签") { model.closeAll() }
@@ -302,28 +309,30 @@ private struct TabItem: View {
     }
 
     /// 标签类型的图标：登录终端、文件。
-    private func kindIcon(_ name: String) -> some View {
+    private func kindIcon(_ name: String, tint: Color = .accentColor) -> some View {
         Image(systemName: name)
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Color.accentColor)
-            .frame(width: 14)
+            .foregroundStyle(tint)
+            .frame(width: 12)
     }
 
     /// 没有命令名的标签（登录终端、文件）：服务器名当标题。
     private func nameLabel(_ name: String, production: Bool) -> some View {
         Text(name)
-            .font(isActive ? Theme.bodyMedium : Theme.body)
+            .font(isActive ? Theme.small.weight(.medium) : Theme.small)
             .foregroundStyle(production ? Theme.danger : .primary)
             .lineLimit(1)
             .truncationMode(.middle)
+            .frame(maxWidth: 140)
     }
 
     private func serverLabel(_ name: String, production: Bool) -> some View {
         Text(name)
-            .font(Theme.small)
+            .font(Theme.caption)
             .foregroundStyle(production ? Theme.danger : .secondary)
             .lineLimit(1)
             .truncationMode(.middle)
+            .frame(maxWidth: 90)
     }
 
     private var title: String {
@@ -338,28 +347,6 @@ private struct TabItem: View {
         case .terminal(let s): s.state.isRunning ? "关闭并结束远端进程（会先确认）" : "关闭（会先确认）"
         case .files(let b): b.isDirty ? "关闭（有未保存的修改，会先确认）" : "关闭（会先确认）"
         }
-    }
-}
-
-/// 运行状态：运行中绿点，成功灰色对勾，失败红色。
-/// 绿点不做呼吸动画：SwiftUI 的无限动画会让整个窗口每帧重算重绘，空闲时也占三成 CPU。
-struct StatusDot: View {
-    let state: TerminalSession.State
-
-    var body: some View {
-        Group {
-            switch state {
-            case .running:
-                Circle()
-                    .fill(Theme.success)
-                    .frame(width: 7, height: 7)
-            case .exited(0):
-                Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-            case .exited, .failed:
-                Image(systemName: "exclamationmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.danger)
-            }
-        }
-        .frame(width: 10)
     }
 }
 

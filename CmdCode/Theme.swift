@@ -362,14 +362,30 @@ struct WindowPinButton: View {
     }
 }
 
-/// 把 SwiftUI 里的置顶状态同步到它所在的主窗口。
+/// 把 SwiftUI 里的置顶状态同步到它所在的主窗口，并关掉系统的拖动移窗。
+/// 无标题栏窗口顶部那一条，系统会把拖动直接当成移动窗口，抢在标签的 DragGesture 前面（侧栏收起时标签拖不动）；
+/// 移动窗口改由 `WindowDragArea` 自己处理。
 struct WindowLevelController: NSViewRepresentable {
     let isPinned: Bool
 
-    func makeNSView(context: Context) -> NSView { NSView() }
+    func makeNSView(context: Context) -> NSView { ControllerView() }
 
     func updateNSView(_ view: NSView, context: Context) {
-        view.window?.level = isPinned ? .floating : .normal
+        (view as? ControllerView)?.isPinned = isPinned
+    }
+
+    private final class ControllerView: NSView {
+        var isPinned = false { didSet { apply() } }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        private func apply() {
+            window?.level = isPinned ? .floating : .normal
+            window?.isMovable = false
+        }
     }
 }
 
@@ -402,20 +418,28 @@ struct EmptyHint: View {
 // MARK: - 拖动窗口
 
 /// 隐藏标题栏后，用它来充当可以拖动窗口的区域；双击缩放窗口，和系统标题栏行为一致。
-struct WindowDragArea: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { DragView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+/// 窗口本身不可移动（见 `WindowLevelController`），这里跟着鼠标挪窗口。用 SwiftUI 手势而不是 NSView 的 mouseDown：
+/// 垫在 SwiftUI 内容背后的 NSView 收不到鼠标事件。
+struct WindowDragArea: View {
+    /// 拖动开始时鼠标和窗口的屏幕位置。
+    @State private var start: (mouse: NSPoint, origin: NSPoint)?
 
-    private final class DragView: NSView {
-        override var mouseDownCanMoveWindow: Bool { true }
-
-        override func mouseDown(with event: NSEvent) {
-            if event.clickCount == 2 {
-                window?.performZoom(nil)
-            } else {
-                window?.performDrag(with: event)
-            }
-        }
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { NSApp.keyWindow?.performZoom(nil) }
+            .gesture(DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    guard let window = NSApp.keyWindow else { return }
+                    let mouse = NSEvent.mouseLocation
+                    // 手势移过一点才开始，起点要扣掉已经移动的距离（屏幕坐标 y 向上）。
+                    let start = start ?? (NSPoint(x: mouse.x - value.translation.width, y: mouse.y + value.translation.height),
+                                          window.frame.origin)
+                    self.start = start
+                    window.setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x,
+                                                  y: start.origin.y + mouse.y - start.mouse.y))
+                }
+                .onEnded { _ in start = nil })
     }
 }
 
